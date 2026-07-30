@@ -146,6 +146,28 @@ git tag v0.1.1 && git push origin v0.1.1
 
 태그 없이 빌드만 확인하려면 Actions 탭에서 workflow_dispatch로 돌린다.
 
+빌드 결과물: macOS 유니버설 `.dmg`(x86_64+arm64), Windows `.exe`(NSIS)와
+`.msi`, 그리고 업데이터용 `latest.json`과 `.sig`.
+
+### CI에서 걸렸던 것들
+
+같은 실수를 반복하지 않도록 남긴다.
+
+**whisper.cpp는 macOS 10.15 이상을 요구한다.** `std::filesystem`을 쓰는데
+유니버설 빌드의 x86_64 타깃은 기본 배포 타깃이 그보다 낮다. 워크플로우에
+`MACOSX_DEPLOYMENT_TARGET: '10.15'`가 없으면 `'path' is unavailable`로
+컴파일이 막힌다.
+
+**Apple 서명 시크릿을 빈 값으로 미리 적어두면 안 된다.** 시크릿이 없어도
+`env:`에 항목이 있으면 환경변수는 빈 문자열로 존재하고, tauri-action은 그걸
+인증서가 있다는 신호로 받아 `security import`를 시도하다 실패한다. 없는 것보다
+빈 플레이스홀더가 더 나쁘다. 그래서 주석으로만 남겨뒀다.
+
+**갓 만든 저장소는 첫 워크플로우에서 릴리즈 생성이 실패할 수 있다.** 토큰
+로그에는 `Contents: write`가 찍히는데도 `Resource not accessible by
+integration`이 났다. 몇 분 뒤 재실행하니 그대로 통과했다 — 권한 전파 지연으로
+보인다. 설정을 바꾸기 전에 한 번 더 돌려보는 게 낫다.
+
 ### macOS 서명
 
 **Apple 유료 계정 없이 ad-hoc 서명(`"signingIdentity": "-"`)으로 나간다.**
@@ -192,9 +214,12 @@ git tag v0.1.1 && git push origin v0.1.1
 | 로컬 요약(Ollama) | **실측 완료** — qwen3:8b |
 | Ollama pull API | **실측 완료** — 정상·실패 응답 모두 확인 |
 | 모델 카탈로그 | **실측 완료** — 8종 전부 레지스트리에서 존재·용량 확인 |
+| macOS·Windows 빌드 | **실측 완료** — v0.1.2가 양쪽 다 성공 |
+| 배포물 | **실측 완료** — dmg를 내려받아 유니버설(x86_64+arm64), ad-hoc 서명, 최소 OS 10.15 확인 |
 | 마이크 녹음 | **미검증** — 개발 기기(Mac mini)에 마이크가 없다 |
 | API 요약(Anthropic) | **미검증** — 키가 없어 호출해보지 못했다 |
 | 앱 화면 전체 흐름 | **미검증** — 창을 띄워 끝까지 눌러본 적이 없다 |
+| Windows 실행 | **미검증** — 빌드만 됐을 뿐 돌려본 적이 없다 |
 
 ### 마이크가 없는 기기
 

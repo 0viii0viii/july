@@ -1,0 +1,121 @@
+//! 전사 → 요약 파이프라인을 UI 없이 확인한다.
+//!
+//!     cargo run --release --example pipeline -- <음성파일> [모델] [요약백엔드]
+//!
+//! 모델:      base | turbo            (기본 turbo)
+//! 요약백엔드: none | ollama | api     (기본 none)
+//!
+//! api를 쓰려면 ANTHROPIC_API_KEY 환경변수가 필요하다.
+
+use std::path::{Path, PathBuf};
+
+use meetnote_lib::{summarize, transcribe};
+
+fn models_dir() -> PathBuf {
+    std::env::var("MEETNOTE_MODELS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("크레이트 디렉터리에 부모가 있어야 합니다")
+                .join("models")
+        })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+
+    let audio = args.next().unwrap_or_else(|| {
+        eprintln!("사용법: cargo run --release --example pipeline -- <음성파일> [base|turbo] [none|ollama|api]");
+        std::process::exit(2);
+    });
+    let model_arg = args.next().unwrap_or_else(|| "turbo".into());
+    let summarizer = args.next().unwrap_or_else(|| "none".into());
+
+    let model_file = match model_arg.as_str() {
+        "base" => "ggml-base.bin",
+        "turbo" => "ggml-large-v3-turbo.bin",
+        other => {
+            eprintln!("알 수 없는 모델: {other} (base 또는 turbo)");
+            std::process::exit(2);
+        }
+    };
+
+    let model_path = models_dir().join(model_file);
+    println!("모델:   {}", model_path.display());
+    println!("음성:   {audio}");
+    println!("\n전사 중...\n");
+
+    // 고유명사 표기를 고정하고 싶으면 MEETNOTE_HINT로 넘긴다.
+    let hint = std::env::var("MEETNOTE_HINT").ok();
+    let result = transcribe::transcribe(
+        &model_path,
+        Path::new(&audio),
+        Some("ko"),
+        hint.as_deref(),
+    )?;
+
+    for seg in &result.segments {
+        println!("[{:>6.1}s → {:>6.1}s] {}", seg.start, seg.end, seg.text);
+    }
+
+    let audio_seconds = result
+        .segments
+        .last()
+        .map(|s| s.end)
+        .unwrap_or(0.0);
+    let speed = if result.elapsed > 0.0 {
+        audio_seconds / result.elapsed
+    } else {
+        0.0
+    };
+    println!(
+        "\n전사 완료: {:.1}초 소요 (음성 {:.1}초, 실시간 대비 {:.1}배)",
+        result.elapsed, audio_seconds, speed
+    );
+
+    let backend = match summarizer.as_str() {
+        "none" => return Ok(()),
+        "ollama" => summarize::Backend::Ollama {
+            model: std::env::var("MEETNOTE_OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into()),
+            endpoint: None,
+        },
+        "api" => summarize::Backend::Anthropic {
+            api_key: std::env::var("ANTHROPIC_API_KEY")
+                .map_err(|_| "ANTHROPIC_API_KEY 환경변수가 필요합니다")?,
+            model: std::env::var("MEETNOTE_ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-opus-5".into()),
+        },
+        other => {
+            eprintln!("알 수 없는 요약 백엔드: {other} (none, ollama, api)");
+            std::process::exit(2);
+        }
+    };
+
+    println!("\n요약 중... ({})\n", backend.label());
+    let started = std::time::Instant::now();
+    let summary = summarize::summarize(&backend, &result.plain_text()).await?;
+    println!("{summary}");
+    println!("\n요약 완료: {:.1}초 소요", started.elapsed().as_secs_f64());
+
+    // MEETNOTE_SAVE_TO가 있으면 앱 보관함 형식(JSON)으로 떨군다. UI를 실제
+    // 데이터로 확인할 때 쓴다.
+    if let Ok(dest) = std::env::var("MEETNOTE_SAVE_TO") {
+        let meeting = serde_json::json!({
+            "id": format!("dev-{}", result.segments.len()),
+            "title": "",
+            "recorded_at": std::env::var("MEETNOTE_RECORDED_AT")
+                .unwrap_or_else(|_| "2026-07-30T22:10:00".into()),
+            "audio_path": audio,
+            "duration": result.segments.last().map(|s| s.end).unwrap_or(0.0),
+            "segments": result.segments,
+            "summary": summary,
+        });
+        let archive = serde_json::json!({ "meetings": [meeting] });
+        std::fs::write(&dest, serde_json::to_string_pretty(&archive)?)?;
+        println!("\n보관함에 저장: {dest}");
+    }
+
+    Ok(())
+}

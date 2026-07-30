@@ -1,0 +1,46 @@
+[package]
+name = "meetnote"
+version = "0.1.0"
+description = "회의 녹음을 회의록으로 바꿔주는 데스크톱 앱"
+authors = ["0viii0viii"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "meetnote_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hound = "3.5.1"
+tokio = { version = "1.53.1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+cpal = "0.18.1"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+tauri-plugin-dialog = "2.7.2"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
+
+# whisper 가속은 플랫폼마다 다르다.
+#
+# macOS는 Metal을 쓴다 — Apple Silicon에서 실시간 대비 13배가 나온다.
+# 그 외 플랫폼은 가속 기능 없이 CPU로만 돈다. Vulkan이나 CUDA를 켤 수도 있지만
+# 빌드 머신에 각각 SDK가 필요하고 사용자 GPU도 가려야 해서, 어디서나 되는 쪽을
+# 기본으로 뒀다. 느리지만 동작은 한다.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.16.0"
+

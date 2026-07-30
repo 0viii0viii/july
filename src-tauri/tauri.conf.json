@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Meetnote",
+  "version": "0.1.0",
+  "identifier": "com.heon.meetnote",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1520",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "회의록",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDMzlDNzAyQkI4NEM2MEMKUldRTXhvUzdBc2M1SE1UV3JIMHdNR3hEWmVleXBYekhvdWM5c3FHcVdHWkdXditGZURYVE1KV3AK",
+      "endpoints": [
+        "https://github.com/0viii0viii/july/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

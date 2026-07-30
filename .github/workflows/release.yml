@@ -55,6 +55,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # whisper.cpp가 std::filesystem을 쓰는데 이건 macOS 10.15부터다.
+          # 유니버설 빌드의 x86_64 타깃은 기본 배포 타깃이 그보다 낮아서
+          # "'path' is unavailable: introduced in macOS 10.15"로 컴파일이 막힌다.
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
           # 자동 업데이트 서명 (updater 아티팩트에 .sig 생성 + latest.json).
           # Apple 코드서명과는 무관하다 — Tauri 자체 업데이트 검증용이다.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

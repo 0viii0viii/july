@@ -63,15 +63,22 @@ jobs:
           # Apple 코드서명과는 무관하다 — Tauri 자체 업데이트 검증용이다.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # --- Apple 정식 서명/공증 (선택) ---
-          # 유료 Developer 계정이 생기면 아래 시크릿만 채우면 된다. 비어 있으면
-          # tauri.conf.json의 ad-hoc 서명("signingIdentity": "-")으로 빌드된다.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          #
+          # --- Apple 정식 서명/공증을 켤 때 ---
+          #
+          # 아래 여섯 줄을 여기에 추가하고 저장소 Secrets를 채우면 된다.
+          #
+          #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          #   APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          #   APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          #   APPLE_ID: ${{ secrets.APPLE_ID }}
+          #   APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          #   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          #
+          # 미리 적어두면 안 된다. 시크릿이 비어 있어도 환경변수 자체는
+          # 존재하게 되고, tauri-action이 그걸 보고 인증서를 가져오려다
+          # "failed to import keychain certificate"로 빌드가 깨진다.
+          # 없는 것보다 빈 플레이스홀더가 더 나쁘다.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '회의록 ${{ github.ref_name }}'

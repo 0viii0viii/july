@@ -2082,6 +2082,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "july"
+version = "0.1.2"
+dependencies = [
+ "cpal",
+ "futures-util",
+ "hound",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+ "tokio",
+ "whisper-rs",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2208,27 +2229,6 @@ dependencies = [
  "log",
  "tendril",
  "web_atoms",
-]
-
-[[package]]
-name = "meetnote"
-version = "0.1.0"
-dependencies = [
- "cpal",
- "futures-util",
- "hound",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-updater",
- "tokio",
- "whisper-rs",
 ]
 
 [[package]]

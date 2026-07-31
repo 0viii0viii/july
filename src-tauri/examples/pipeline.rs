@@ -9,10 +9,10 @@
 
 use std::path::{Path, PathBuf};
 
-use meetnote_lib::{summarize, transcribe};
+use july_lib::{summarize, transcribe};
 
 fn models_dir() -> PathBuf {
-    std::env::var("MEETNOTE_MODELS_DIR")
+    std::env::var("JULY_MODELS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -47,8 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("음성:   {audio}");
     println!("\n전사 중...\n");
 
-    // 고유명사 표기를 고정하고 싶으면 MEETNOTE_HINT로 넘긴다.
-    let hint = std::env::var("MEETNOTE_HINT").ok();
+    // 고유명사 표기를 고정하고 싶으면 JULY_HINT로 넘긴다.
+    let hint = std::env::var("JULY_HINT").ok();
     let result = transcribe::transcribe(
         &model_path,
         Path::new(&audio),
@@ -78,13 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = match summarizer.as_str() {
         "none" => return Ok(()),
         "ollama" => summarize::Backend::Ollama {
-            model: std::env::var("MEETNOTE_OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into()),
+            model: std::env::var("JULY_OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".into()),
             endpoint: None,
         },
         "api" => summarize::Backend::Anthropic {
             api_key: std::env::var("ANTHROPIC_API_KEY")
                 .map_err(|_| "ANTHROPIC_API_KEY 환경변수가 필요합니다")?,
-            model: std::env::var("MEETNOTE_ANTHROPIC_MODEL")
+            model: std::env::var("JULY_ANTHROPIC_MODEL")
                 .unwrap_or_else(|_| "claude-opus-5".into()),
         },
         other => {
@@ -99,13 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{summary}");
     println!("\n요약 완료: {:.1}초 소요", started.elapsed().as_secs_f64());
 
-    // MEETNOTE_SAVE_TO가 있으면 앱 보관함 형식(JSON)으로 떨군다. UI를 실제
+    // JULY_SAVE_TO가 있으면 앱 보관함 형식(JSON)으로 떨군다. UI를 실제
     // 데이터로 확인할 때 쓴다.
-    if let Ok(dest) = std::env::var("MEETNOTE_SAVE_TO") {
+    if let Ok(dest) = std::env::var("JULY_SAVE_TO") {
         let meeting = serde_json::json!({
             "id": format!("dev-{}", result.segments.len()),
             "title": "",
-            "recorded_at": std::env::var("MEETNOTE_RECORDED_AT")
+            "recorded_at": std::env::var("JULY_RECORDED_AT")
                 .unwrap_or_else(|_| "2026-07-30T22:10:00".into()),
             "audio_path": audio,
             "duration": result.segments.last().map(|s| s.end).unwrap_or(0.0),

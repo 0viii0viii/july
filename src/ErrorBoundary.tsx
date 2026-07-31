@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<
       <main className="shell" style={{ paddingTop: 48 }}>
         <header className="masthead">
           <h1 className="wordmark">
-            회의록 <span className="rev">ERROR</span>
+            July <span className="rev">ERROR</span>
           </h1>
         </header>
 

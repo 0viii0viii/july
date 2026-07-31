@@ -81,7 +81,7 @@ jobs:
           # 없는 것보다 빈 플레이스홀더가 더 나쁘다.
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: '회의록 ${{ github.ref_name }}'
+          releaseName: 'July ${{ github.ref_name }}'
           releaseBody: |
             회의 녹음을 회의록으로 바꿔주는 데스크톱 앱.
             **음성은 이 기기 밖으로 나가지 않습니다** — 전사는 전부 로컬에서 처리합니다.
@@ -100,7 +100,7 @@ jobs:
 
             - **터미널 (가장 확실)** — 앱을 `응용 프로그램`으로 옮긴 뒤:
               ```
-              xattr -dr com.apple.quarantine /Applications/Meetnote.app
+              xattr -dr com.apple.quarantine /Applications/July.app
               ```
               그리고 평소처럼 더블클릭.
             - **설정에서 허용** — 앱 더블클릭(경고 닫기) → **시스템 설정 → 개인정보 보호 및 보안** → 아래로 스크롤 → **"그래도 열기"** → 암호 인증. 이후로는 그냥 실행됩니다.

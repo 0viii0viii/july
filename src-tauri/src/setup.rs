@@ -58,9 +58,9 @@ impl ModelSize {
 /// 모델을 두는 곳.
 ///
 /// 개발 중에는 저장소의 `models/`를 쓰고, 배포판에서는 앱 데이터 디렉터리를
-/// 쓴다. `MEETNOTE_MODELS_DIR`로 강제할 수 있다.
+/// 쓴다. `JULY_MODELS_DIR`로 강제할 수 있다.
 pub fn models_dir(app: &AppHandle) -> PathBuf {
-    if let Ok(dir) = std::env::var("MEETNOTE_MODELS_DIR") {
+    if let Ok(dir) = std::env::var("JULY_MODELS_DIR") {
         return PathBuf::from(dir);
     }
 

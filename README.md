@@ -1,4 +1,4 @@
-# 회의록 (meetnote)
+# July
 
 회의 녹음을 회의록으로 바꿔주는 macOS 데스크톱 앱.
 
@@ -82,10 +82,10 @@ ANTHROPIC_API_KEY=sk-ant-... \
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `MEETNOTE_HINT` | 없음 | 참석자 이름·전문용어. 오인식을 크게 줄인다 (아래 참고) |
-| `MEETNOTE_MODELS_DIR` | `../models` | whisper 모델 위치 |
-| `MEETNOTE_OLLAMA_MODEL` | `qwen3:8b` | 로컬 요약 모델 |
-| `MEETNOTE_ANTHROPIC_MODEL` | `claude-opus-5` | API 요약 모델 |
+| `JULY_HINT` | 없음 | 참석자 이름·전문용어. 오인식을 크게 줄인다 (아래 참고) |
+| `JULY_MODELS_DIR` | `../models` | whisper 모델 위치 |
+| `JULY_OLLAMA_MODEL` | `qwen3:8b` | 로컬 요약 모델 |
+| `JULY_ANTHROPIC_MODEL` | `claude-opus-5` | API 요약 모델 |
 
 ## 회의 정보는 회의마다 받는다
 

@@ -49,7 +49,7 @@ fn main() {
     }
 
     println!("\n우리 래퍼:");
-    match meetnote_lib::audio::input_devices() {
+    match july_lib::audio::input_devices() {
         Ok(ds) if ds.is_empty() => println!("  (빈 목록)"),
         Ok(ds) => {
             for d in ds {
@@ -59,7 +59,7 @@ fn main() {
         Err(e) => println!("  오류: {e}"),
     }
 
-    let hw = meetnote_lib::catalog::hardware();
+    let hw = july_lib::catalog::hardware();
     println!(
         "\n기기: {} · 메모리 {:.0}GB · 모델 예산 {:.1}GB",
         hw.cpu,
@@ -68,7 +68,7 @@ fn main() {
     );
 
     println!("\n요약 모델 카탈로그:");
-    for e in meetnote_lib::catalog::catalog(&hw, &[]) {
+    for e in july_lib::catalog::catalog(&hw, &[]) {
         println!(
             "  {:<18} {:>6.1}GB  {:?}{}{}",
             e.id,

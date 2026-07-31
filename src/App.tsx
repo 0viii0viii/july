@@ -43,9 +43,9 @@ import { Minutes } from "./Minutes";
 import { Updater } from "./Updater";
 import "./App.css";
 
-const STORE_KEY = "meetnote.settings";
+const STORE_KEY = "july.settings";
 /** 직전 회의의 참석자·용어. 팀은 대개 반복되므로 다음 회의에 미리 채워준다. */
-const LAST_CONTEXT_KEY = "meetnote.lastContext";
+const LAST_CONTEXT_KEY = "july.lastContext";
 const METER_BARS = 32;
 
 type Phase =
@@ -445,7 +445,7 @@ export default function App() {
 
       <aside className="rail">
         <div className="rail-top">
-          <h1 className="brand">회의록</h1>
+          <h1 className="brand">July</h1>
           <button
             className={`new-btn${recording ? " live" : ""}`}
             onClick={toggleRecord}

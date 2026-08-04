@@ -271,15 +271,14 @@ export default function App() {
    * 바꿔봐야 아무 변화도 안 보인다 — 드롭이 조용히 삼켜진 것처럼 느껴진다.
    * 대신 무엇을 받아뒀는지 알려주고, 준비가 끝나면 그 파일로 이어서 간다.
    */
-  const intake = useCallback(
-    (path: string, seconds: number | null) => {
-      setError(null);
-      setCurrent(null);
-      setPending({ path, seconds });
-      if (!needsSetupRef.current) setPhase("briefing");
-    },
-    [],
-  );
+  const intake = useCallback((path: string, seconds: number | null) => {
+    setError(null);
+    setCurrent(null);
+    setPending({ path, seconds });
+    // 반드시 둘 중 하나로 확정한다. 조건부로만 바꾸면 녹음을 멈춘 뒤에도
+    // phase가 "recording"에 남아 녹음 화면이 그대로 떠 있게 된다.
+    setPhase(needsSetupRef.current ? "idle" : "briefing");
+  }, []);
 
   const pickFile = useCallback(async () => {
     try {
@@ -543,26 +542,15 @@ export default function App() {
 
         {error && <div className="alarm">{error}</div>}
 
-        {phase === "booting" ? null : needsSetup && env ? (
-          <Gate
-            env={env}
-            progress={download}
-            busy={busy}
-            onDownload={onDownloadModel}
-            selectedSummarizer={settings.ollamaModel}
-            pending={pending?.path ?? null}
-            pulling={pulling}
-            pullProgress={pullProgress}
-            onSelectSummarizer={(id) =>
-              setSettings((s) => ({
-                ...s,
-                ollamaModel: id,
-                summarizer: "ollama",
-              }))
-            }
-            onPullSummarizer={onPullSummarizer}
-          />
-        ) : recording ? (
+        {/*
+          화면 우선순위. 진행 중인 작업이 준비 화면보다 앞선다.
+
+          예전엔 준비 화면이 맨 앞이었는데, 그러면 준비가 덜 끝난 상태에서
+          시작한 녹음이나 드롭이 화면에 전혀 안 나타난다 — 눌러도 아무 일도
+          안 일어나는 것처럼 보인다. 지금 하고 있는 일을 항상 먼저 보여주고,
+          준비 화면은 아무것도 안 하고 있을 때만 띄운다.
+        */}
+        {phase === "booting" ? null : recording ? (
           <div className="progress">
             <div className="progress-card">
               <div className="live-bar">
@@ -630,6 +618,25 @@ export default function App() {
               </div>
             </div>
           </div>
+        ) : needsSetup && env ? (
+          <Gate
+            env={env}
+            progress={download}
+            busy={busy}
+            onDownload={onDownloadModel}
+            selectedSummarizer={settings.ollamaModel}
+            pending={pending?.path ?? null}
+            pulling={pulling}
+            pullProgress={pullProgress}
+            onSelectSummarizer={(id) =>
+              setSettings((s) => ({
+                ...s,
+                ollamaModel: id,
+                summarizer: "ollama",
+              }))
+            }
+            onPullSummarizer={onPullSummarizer}
+          />
         ) : current ? (
           <article className="doc">
             <header className="doc-head">

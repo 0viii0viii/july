@@ -7,9 +7,6 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-/// whisper가 요구하는 입력 형식.
-const TARGET_SAMPLE_RATE: u32 = 16_000;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     /// 시작 시각(초).
@@ -41,49 +38,6 @@ impl Transcript {
     }
 }
 
-/// WAV 파일을 16kHz 모노 f32 샘플로 읽는다.
-///
-/// 스테레오는 채널 평균으로 모노화한다. 샘플레이트가 다르면 에러 — 리샘플링은
-/// 호출부에서 처리할 문제고, 조용히 품질을 떨어뜨리는 것보다 낫다.
-fn load_wav(path: &Path) -> Result<Vec<f32>, String> {
-    let mut reader = hound::WavReader::open(path)
-        .map_err(|e| format!("WAV 파일을 열 수 없습니다: {e}"))?;
-    let spec = reader.spec();
-
-    if spec.sample_rate != TARGET_SAMPLE_RATE {
-        return Err(format!(
-            "샘플레이트가 {}Hz입니다. {}Hz 모노 WAV로 변환해서 넣어주세요.",
-            spec.sample_rate, TARGET_SAMPLE_RATE
-        ));
-    }
-
-    let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Int => {
-            // 비트 깊이와 무관하게 [-1.0, 1.0]으로 정규화한다.
-            let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 / max))
-                .collect::<Result<_, _>>()
-                .map_err(|e| format!("WAV 샘플을 읽을 수 없습니다: {e}"))?
-        }
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("WAV 샘플을 읽을 수 없습니다: {e}"))?,
-    };
-
-    if spec.channels == 1 {
-        return Ok(samples);
-    }
-
-    let channels = spec.channels as usize;
-    Ok(samples
-        .chunks(channels)
-        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-        .collect())
-}
-
 /// 오디오 파일을 전사한다.
 ///
 /// `language`가 `None`이면 whisper가 자동 감지한다. 한국어 회의라면 "ko"를
@@ -105,7 +59,7 @@ pub fn transcribe(
         ));
     }
 
-    let audio = load_wav(audio_path)?;
+    let audio = crate::decode::decode_to_mono_16k(audio_path)?.samples;
     let started = std::time::Instant::now();
 
     let ctx = WhisperContext::new_with_params(

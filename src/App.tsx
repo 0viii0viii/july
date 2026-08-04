@@ -48,6 +48,26 @@ const STORE_KEY = "july.settings";
 const LAST_CONTEXT_KEY = "july.lastContext";
 const METER_BARS = 32;
 
+/**
+ * 열 수 있는 음성 형식.
+ *
+ * symphonia로 디코딩하므로 샘플레이트와 채널 수는 상관없다 — 44.1kHz
+ * 스테레오든 뭐든 앱이 16kHz 모노로 바꿔서 넘긴다.
+ */
+const AUDIO_EXTENSIONS = [
+  "m4a", // macOS 음성 메모 · iPhone 녹음
+  "mp3",
+  "wav",
+  "flac",
+  "aac",
+  "mp4",
+  "m4b",
+  "ogg",
+  "oga",
+  "webm",
+  "mkv",
+];
+
 type Phase =
   | "booting"
   | "idle"
@@ -285,7 +305,9 @@ export default function App() {
       const picked = await openFileDialog({
         multiple: false,
         directory: false,
-        filters: [{ name: "음성 파일", extensions: ["wav"] }],
+        // macOS 음성 메모는 m4a로 저장한다. wav만 받으면 정작 맥에서 녹음한
+        // 파일이 목록에 뜨지도 않는다.
+        filters: [{ name: "음성 파일", extensions: AUDIO_EXTENSIONS }],
       });
       if (typeof picked === "string") intake(picked, null);
     } catch (e) {

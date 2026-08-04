@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod decode;
 pub mod catalog;
 pub mod setup;
 pub mod store;

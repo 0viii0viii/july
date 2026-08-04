@@ -1,6 +1,6 @@
 [package]
 name = "july"
-version = "0.1.7"
+version = "0.1.8"
 description = "회의 녹음을 회의록으로 바꿔주는 데스크톱 앱"
 authors = ["0viii0viii"]
 edition = "2021"
@@ -31,6 +31,7 @@ tauri-plugin-dialog = "2.7.2"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+symphonia = { version = "0.6.0", features = ["aac", "isomp4", "mp3", "alac"] }
 
 # whisper 가속은 플랫폼마다 다르다.
 #

@@ -47,8 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("음성:   {audio}");
     println!("\n전사 중...\n");
 
-    // 고유명사 표기를 고정하고 싶으면 JULY_HINT로 넘긴다.
-    let hint = std::env::var("JULY_HINT").ok();
+    // 회의 배경 정보. 앱에서는 처리 직전에 화면으로 받는다.
+    let context = summarize::Context {
+        attendees: std::env::var("JULY_ATTENDEES").unwrap_or_default(),
+        topic: std::env::var("JULY_TOPIC").unwrap_or_default(),
+        terms: std::env::var("JULY_TERMS").unwrap_or_default(),
+    };
+    let hint = context.as_speech_hint();
     let result = transcribe::transcribe(
         &model_path,
         Path::new(&audio),
@@ -95,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n요약 중... ({})\n", backend.label());
     let started = std::time::Instant::now();
-    let summary = summarize::summarize(&backend, &result.plain_text()).await?;
+    let summary = summarize::summarize(&backend, &result.plain_text(), &context).await?;
     println!("{summary}");
     println!("\n요약 완료: {:.1}초 소요", started.elapsed().as_secs_f64());
 

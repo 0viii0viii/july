@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import pkg from "./package.json";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -7,6 +8,13 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+
+  // 화면에 버전을 띄우기 위해 빌드 시점에 박아 넣는다. 런타임 API로 읽을 수도
+  // 있지만 그건 권한(ACL)이 걸려 있어, 정작 문제를 진단해야 할 때 같이 막힐 수
+  // 있다. 버전 표시만큼은 무조건 보여야 한다.
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

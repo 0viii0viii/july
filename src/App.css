@@ -332,6 +332,15 @@ button:disabled {
   background: var(--ok);
 }
 
+.local-mark .ver {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-4);
+  opacity: 0.75;
+  user-select: text;
+  cursor: text;
+}
+
 .icon-btn {
   padding: 5px 9px;
   border-radius: 6px;

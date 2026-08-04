@@ -299,15 +299,26 @@ export default function App() {
     let stop: Promise<() => void> | null = null;
     try {
       stop = getCurrentWebview().onDragDropEvent((event) => {
-        if (event.payload.type === "over") {
+        const p = event.payload;
+        // enter도 드래그 중이다. over만 보면 진입 순간에 오버레이가 깜빡인다.
+        if (p.type === "enter" || p.type === "over") {
           setDragging(true);
-        } else if (event.payload.type === "drop") {
-          setDragging(false);
-          const file = event.payload.paths[0];
-          if (file) intake(file, null);
-        } else {
-          setDragging(false);
+          return;
         }
+        setDragging(false);
+        if (p.type !== "drop") return;
+
+        const file = p.paths?.[0];
+        // 경로가 안 넘어오는 경우가 있으면 조용히 넘기지 말고 드러낸다.
+        // 아무 반응이 없으면 사용자는 앱이 고장난 줄 안다.
+        if (!file) {
+          setError(
+            "끌어다 놓은 파일의 경로를 읽지 못했습니다. " +
+              "왼쪽의 '음성 파일 열기' 버튼으로 시도해 주세요.",
+          );
+          return;
+        }
+        intake(file, null);
       });
     } catch (e) {
       console.error("드래그앤드롭을 등록하지 못했습니다:", e);
@@ -529,6 +540,9 @@ export default function App() {
         <div className="rail-foot">
           <span className="local-mark">
             <i />이 기기에서 처리
+            {/* 어느 버전이 도는지 알 수 없으면 버그 하나 잡는 데 왕복이 몇 번씩
+                든다. 항상 보이게 둔다. */}
+            <em className="ver">v{__APP_VERSION__}</em>
           </span>
           <button className="icon-btn" onClick={() => setShowConfig(true)}>
             설정

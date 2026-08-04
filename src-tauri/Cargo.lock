@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "july"
-version = "0.1.2"
+version = "0.1.5"
 dependencies = [
  "cpal",
  "futures-util",

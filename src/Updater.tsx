@@ -6,6 +6,8 @@ type State =
   | { kind: "idle" }
   | { kind: "found"; update: Update }
   | { kind: "installing" }
+  /** 설치는 끝났지만 자동 재시작이 안 됐다. 업데이트 자체는 적용된 상태다. */
+  | { kind: "installed" }
   | { kind: "failed"; message: string };
 
 /**
@@ -55,6 +57,16 @@ export function Updater() {
     );
   }
 
+  if (state.kind === "installed") {
+    return (
+      <div className="update-bar">
+        <span>
+          <b>업데이트가 설치됐습니다.</b> 앱을 종료했다 다시 열면 적용됩니다.
+        </span>
+      </div>
+    );
+  }
+
   const { update } = state;
   return (
     <div className="update-bar">
@@ -71,9 +83,18 @@ export function Updater() {
             setState({ kind: "installing" });
             try {
               await update.downloadAndInstall();
-              await relaunch();
             } catch (e) {
               setState({ kind: "failed", message: String(e) });
+              return;
+            }
+            // 여기까지 왔으면 업데이트는 이미 적용됐다. 재시작이 실패해도
+            // "실패"라고 하면 안 된다 — 사용자가 멀쩡한 업데이트를 다시
+            // 설치하려 든다.
+            try {
+              await relaunch();
+            } catch (e) {
+              console.error("자동 재시작 실패:", e);
+              setState({ kind: "installed" });
             }
           }}
         >

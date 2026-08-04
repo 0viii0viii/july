@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -263,13 +263,23 @@ export default function App() {
     [backend, refreshList],
   );
 
-  /** 음성을 확보했다 — 바로 돌리지 않고 회의 정보부터 받는다. */
-  const intake = useCallback((path: string, seconds: number | null) => {
-    setError(null);
-    setCurrent(null);
-    setPending({ path, seconds });
-    setPhase("briefing");
-  }, []);
+  /**
+   * 음성을 확보했다 — 바로 돌리지 않고 회의 정보부터 받는다.
+   *
+   * 준비가 안 끝났으면(모델 미설치) 화면을 넘기지 않고 파일만 들고 있는다.
+   * 준비 화면이 다른 모든 화면보다 우선해서 그려지기 때문에, 여기서 phase를
+   * 바꿔봐야 아무 변화도 안 보인다 — 드롭이 조용히 삼켜진 것처럼 느껴진다.
+   * 대신 무엇을 받아뒀는지 알려주고, 준비가 끝나면 그 파일로 이어서 간다.
+   */
+  const intake = useCallback(
+    (path: string, seconds: number | null) => {
+      setError(null);
+      setCurrent(null);
+      setPending({ path, seconds });
+      if (!needsSetupRef.current) setPhase("briefing");
+    },
+    [],
+  );
 
   const pickFile = useCallback(async () => {
     try {
@@ -416,7 +426,19 @@ export default function App() {
     settings.summarizer === "anthropic"
       ? settings.apiKey.trim().length > 0
       : !!settings.ollamaModel && (env?.ollamaModels.includes(settings.ollamaModel) ?? false);
-  const needsSetup = !!env && (!ready || !canSummarize);
+  // env를 아직 못 읽었을 때도 "준비 안 됨"으로 본다. 그래야 부팅 중에 들어온
+  // 드롭이 화면을 앞질러 가지 않고 얌전히 대기한다.
+  const needsSetup = !env || !ready || !canSummarize;
+
+  // intake()는 드래그앤드롭 리스너 안에서 불리므로 등록 시점의 값에 갇힌다.
+  // 최신 값을 ref로 따로 들고 있어야 한다.
+  const needsSetupRef = useRef(needsSetup);
+  useEffect(() => {
+    needsSetupRef.current = needsSetup;
+    // 준비가 끝났는데 받아둔 파일이 있으면 그때 이어서 간다. 사용자가 파일을
+    // 다시 끌어다 놓게 만들 이유가 없다.
+    if (!needsSetup && pending && phase === "idle") setPhase("briefing");
+  }, [needsSetup, pending, phase]);
   // Mac mini·Studio처럼 내장 마이크가 없는 기기가 있다. 눌러보고 알게 하는
   // 대신 미리 막고 이유를 알려준다.
   const noMic = devices.length === 0;
@@ -462,10 +484,12 @@ export default function App() {
           </button>
 
           {/* 드래그앤드롭만 있으면 그런 기능이 있는지도 모른다 */}
+          {/* 준비 전에도 고를 수 있게 둔다. 끌어다 놓는 쪽은 받아주면서
+              버튼만 막아두면 일관성이 없다. 고른 파일은 대기시킨다. */}
           <button
             className="open-btn"
             onClick={pickFile}
-            disabled={working || recording || !ready}
+            disabled={working || recording}
           >
             음성 파일 열기
           </button>
@@ -526,6 +550,7 @@ export default function App() {
             busy={busy}
             onDownload={onDownloadModel}
             selectedSummarizer={settings.ollamaModel}
+            pending={pending?.path ?? null}
             pulling={pulling}
             pullProgress={pullProgress}
             onSelectSummarizer={(id) =>
@@ -678,7 +703,7 @@ export default function App() {
                 ? "마이크가 연결돼 있지 않습니다. 음성 파일을 열거나 창 위로 끌어다 놓으면 회의록이 만들어집니다."
                 : "녹음을 시작하거나, 이미 있는 음성 파일을 열어 보세요. 창 위로 끌어다 놓아도 됩니다."}
             </p>
-            <button className="btn" onClick={pickFile} disabled={!ready}>
+            <button className="btn" onClick={pickFile}>
               음성 파일 열기
             </button>
           </div>

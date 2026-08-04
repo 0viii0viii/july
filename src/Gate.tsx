@@ -19,6 +19,7 @@ export function Gate({
   busy,
   onDownload,
   selectedSummarizer,
+  pending,
   pulling,
   pullProgress,
   onSelectSummarizer,
@@ -29,6 +30,8 @@ export function Gate({
   busy: boolean;
   onDownload: (model: ModelSize) => void;
   selectedSummarizer: string;
+  /** 준비가 끝나길 기다리는 음성 파일 경로. 준비 중에 끌어다 놓은 것. */
+  pending: string | null;
   pulling: string | null;
   pullProgress: PullProgress | null;
   onSelectSummarizer: (id: string) => void;
@@ -51,6 +54,15 @@ export function Gate({
         음성 인식도 요약도 이 기기 안에서 돌아갑니다. 그래서 모델을 한 번
         내려받아야 하고, 그다음부터는 인터넷 없이 회의록이 만들어집니다.
       </p>
+
+      {/* 준비 중에 파일을 끌어다 놓은 경우. 아무 반응이 없으면 드롭이 씹힌
+          줄 알게 되므로 무엇을 들고 있는지 반드시 알려준다. */}
+      {pending && (
+        <div className="gate-pending">
+          <b>{pending.split("/").pop()}</b>
+          <span>준비가 끝나면 이 파일로 바로 회의록을 만듭니다.</span>
+        </div>
+      )}
 
       {/* 1. 음성 인식 모델 */}
       <div className="need">

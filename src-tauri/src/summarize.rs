@@ -16,6 +16,16 @@ const ANTHROPIC_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// 있고 max_tokens가 thinking과 응답을 합쳐서 제한하므로 여유를 둔다.
 const ANTHROPIC_MAX_TOKENS: u32 = 8_000;
 
+/// 회의록 출력에 남겨둘 토큰. 컨텍스트는 프롬프트와 응답이 나눠 쓴다.
+const OLLAMA_OUTPUT_HEADROOM: usize = 2_048;
+
+/// Ollama가 num_ctx 없이 돌 때의 런타임 기본값. 이 밑으로는 내려갈 이유가 없다.
+const OLLAMA_MIN_CTX: usize = 4_096;
+
+/// 카탈로그의 8B급 모델이 40960까지 지원하지만, 그만큼 KV 캐시를 잡는다.
+/// 32K면 세 시간짜리 회의도 들어간다.
+const OLLAMA_MAX_CTX: usize = 32_768;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Backend {
@@ -158,6 +168,30 @@ fn strip_think_tags(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// 프롬프트를 담을 수 있는 컨텍스트 크기를 고른다.
+///
+/// **이걸 넘기지 않으면 Ollama는 기본 4096으로 돌고, 넘치는 프롬프트를 앞에서부터
+/// 버린다.** 회의록 프롬프트는 배경 정보와 출력 형식이 맨 앞에 있어서 그게 통째로
+/// 날아가고 녹취록 꼬리만 남는다 — 요약이 형식도 안 맞고 참석자 이름도 못 붙이는
+/// 원인이었다.
+///
+/// 항상 최대로 잡지 않는 건 KV 캐시 때문이다. 8B 모델을 32K로 열면 몇 GB를 더
+/// 잡는데, 10분짜리 회의에는 필요 없다. 2의 거듭제곱으로 올려서 같은 길이의
+/// 회의가 같은 컨텍스트를 쓰게 한다 — 그래야 Ollama가 모델을 다시 안 올린다.
+fn choose_num_ctx(prompt: &str) -> usize {
+    // qwen3 토크나이저 실측으로 한국어는 글자당 0.62토큰이었다(24,625자 →
+    // 15,366토큰). 영어·숫자는 이보다 낮으니 한국어가 최악이고, 0.85로 잡으면
+    // 4할 가까운 여유가 남는다. 정확한 토큰 수는 세어볼 방법이 없으므로
+    // 모자라서 잘리는 것보다 남아서 메모리를 조금 더 쓰는 쪽을 택한다.
+    let estimated = prompt.chars().count() * 85 / 100 + OLLAMA_OUTPUT_HEADROOM;
+
+    let mut ctx = OLLAMA_MIN_CTX;
+    while ctx < estimated && ctx < OLLAMA_MAX_CTX {
+        ctx *= 2;
+    }
+    ctx.min(OLLAMA_MAX_CTX)
+}
+
 #[derive(Deserialize)]
 struct OllamaResponse {
     response: String,
@@ -172,15 +206,22 @@ async fn summarize_ollama(
 ) -> Result<String, String> {
     let base = endpoint.unwrap_or(OLLAMA_DEFAULT_ENDPOINT).trim_end_matches('/');
     let url = format!("{base}/api/generate");
+    let prompt = build_prompt(transcript, context);
 
     let res = client
         .post(&url)
         .json(&serde_json::json!({
             "model": model,
-            "prompt": build_prompt(transcript, context),
+            "prompt": prompt,
             "stream": false,
             // 추론 모델의 사고 과정은 회의록에 불필요하다.
             "think": false,
+            "options": {
+                "num_ctx": choose_num_ctx(&prompt),
+                // 카탈로그 모델들의 기본값은 0.6 언저리다. 회의록은 녹취록에
+                // 있는 내용만 옮기는 작업이라 낮을수록 지어내는 게 준다.
+                "temperature": 0.3,
+            },
         }))
         .send()
         .await
@@ -340,5 +381,31 @@ mod tests {
     #[test]
     fn leaves_plain_text_alone() {
         assert_eq!(strip_think_tags("  회의록  "), "회의록");
+    }
+
+    #[test]
+    fn short_meeting_stays_at_minimum_ctx() {
+        assert_eq!(choose_num_ctx("짧은 회의"), OLLAMA_MIN_CTX);
+    }
+
+    #[test]
+    fn ctx_covers_a_long_meeting() {
+        // 실측 픽스처: 24,625자가 15,366토큰이었다. 기본 4096으로 돌리면
+        // Ollama가 2,050토큰만 읽고 나머지를 앞에서부터 버렸다.
+        let long = "가".repeat(24_625);
+        let ctx = choose_num_ctx(&long);
+        assert!(ctx > 15_366 + OLLAMA_OUTPUT_HEADROOM, "실측 토큰 수를 못 담는다: {ctx}");
+    }
+
+    #[test]
+    fn short_meeting_does_not_reserve_the_maximum() {
+        // 10분 남짓한 회의. 이런 건 32K를 잡을 이유가 없다.
+        let ctx = choose_num_ctx(&"가".repeat(8_000));
+        assert!(ctx < OLLAMA_MAX_CTX, "짧은 회의에 KV 캐시를 낭비한다: {ctx}");
+    }
+
+    #[test]
+    fn ctx_is_capped() {
+        assert_eq!(choose_num_ctx(&"가".repeat(500_000)), OLLAMA_MAX_CTX);
     }
 }

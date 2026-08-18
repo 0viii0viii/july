@@ -1,6 +1,6 @@
 [package]
 name = "july"
-version = "0.1.8"
+version = "0.1.9"
 description = "회의 녹음을 회의록으로 바꿔주는 데스크톱 앱"
 authors = ["0viii0viii"]
 edition = "2021"

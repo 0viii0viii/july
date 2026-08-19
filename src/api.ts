@@ -97,6 +97,15 @@ export const downloadModel = (model: ModelSize) =>
 export const listInputDevices = () =>
   invoke<InputDevice[]>("list_input_devices");
 
+/// 마이크 권한 상태. 창을 띄우지 않는다.
+export type MicPermission = "granted" | "not_determined" | "denied" | "not_required";
+
+export const microphonePermission = () =>
+  invoke<MicPermission>("microphone_permission");
+
+export const openMicrophoneSettings = () =>
+  invoke<void>("open_microphone_settings");
+
 export const startRecording = (device: string | null, stamp: string) =>
   invoke<string>("start_recording", { device, stamp });
 

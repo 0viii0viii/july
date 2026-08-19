@@ -14,6 +14,9 @@ import {
   getMeeting,
   inspectEnvironment,
   listInputDevices,
+  microphonePermission,
+  openMicrophoneSettings,
+  type MicPermission,
   listMeetings,
   localIso,
   localStamp,
@@ -117,6 +120,8 @@ export default function App() {
 
   const [env, setEnv] = useState<Environment | null>(null);
   const [devices, setDevices] = useState<InputDevice[]>([]);
+  // 마이크가 없는 것과 권한이 막힌 것은 사용자가 할 일이 전혀 다르다.
+  const [micPermission, setMicPermission] = useState<MicPermission>("not_required");
   const [download, setDownload] = useState<DownloadProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [pulling, setPulling] = useState<string | null>(null);
@@ -158,6 +163,9 @@ export default function App() {
         await refreshEnv();
         await refreshList();
         setDevices(await listInputDevices().catch(() => []));
+        setMicPermission(
+          await microphonePermission().catch<MicPermission>(() => "not_required"),
+        );
       } catch (e) {
         // 여기서 삼키면 아무것도 안 그려진 빈 창만 남는다. 반드시 드러낸다.
         setError(`앱 상태를 확인할 수 없습니다: ${e}`);
@@ -473,7 +481,12 @@ export default function App() {
   }, [needsSetup, pending, phase]);
   // Mac mini·Studio처럼 내장 마이크가 없는 기기가 있다. 눌러보고 알게 하는
   // 대신 미리 막고 이유를 알려준다.
-  const noMic = devices.length === 0;
+  //
+  // 권한이 막혀서 장치가 안 보이는 경우와는 구별해야 한다. macOS는 권한 없는
+  // 앱에게 입력 장치를 숨기므로 증상이 똑같이 "장치 0개"로 나타나지만, 사용자가
+  // 할 일은 전혀 다르다 — 하나는 마이크를 꽂는 것이고 하나는 설정을 켜는 것이다.
+  const micBlocked = micPermission === "denied";
+  const noMic = devices.length === 0 && !micBlocked;
 
   // 목록을 오늘/어제/이번 주/지난 기록으로 묶는다.
   const grouped = useMemo(() => {
@@ -503,7 +516,7 @@ export default function App() {
           <button
             className={`new-btn${recording ? " live" : ""}`}
             onClick={toggleRecord}
-            disabled={working || (!recording && (noMic || !ready))}
+            disabled={working || (!recording && (noMic || micBlocked || !ready))}
           >
             {recording ? (
               <>
@@ -742,10 +755,22 @@ export default function App() {
             <div className="blank-art" />
             <h2>회의록을 만들어 보세요</h2>
             <p>
-              {noMic
-                ? "마이크가 연결돼 있지 않습니다. 음성 파일을 열거나 창 위로 끌어다 놓으면 회의록이 만들어집니다."
-                : "녹음을 시작하거나, 이미 있는 음성 파일을 열어 보세요. 창 위로 끌어다 놓아도 됩니다."}
+              {micBlocked
+                ? "마이크 사용이 허용되지 않아 녹음할 수 없습니다. 시스템 설정에서 July를 켜 주세요."
+                : noMic
+                  ? "마이크가 연결돼 있지 않습니다. 음성 파일을 열거나 창 위로 끌어다 놓으면 회의록이 만들어집니다."
+                  : "녹음을 시작하거나, 이미 있는 음성 파일을 열어 보세요. 창 위로 끌어다 놓아도 됩니다."}
             </p>
+            {micBlocked && (
+              <button
+                className="btn"
+                onClick={() => {
+                  openMicrophoneSettings();
+                }}
+              >
+                마이크 설정 열기
+              </button>
+            )}
             <button className="btn" onClick={pickFile}>
               음성 파일 열기
             </button>

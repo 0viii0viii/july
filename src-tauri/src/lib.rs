@@ -4,6 +4,7 @@ pub mod diarize;
 pub mod catalog;
 pub mod setup;
 pub mod store;
+pub mod permission;
 pub mod summarize;
 pub mod terms;
 pub mod transcribe;
@@ -13,6 +14,7 @@ use std::path::PathBuf;
 use audio::{InputDevice, Recorder, RecordingStatus};
 use setup::{Environment, ModelSize};
 use store::{Meeting, MeetingBrief};
+use permission::MicPermission;
 use summarize::{Backend, Context};
 use tauri::{AppHandle, Manager, State};
 use transcribe::Transcript;
@@ -46,8 +48,30 @@ async fn pull_summarizer(
 
 // -------------------------------------------------------------------- 녹음
 
+/// 마이크 권한 상태. 창을 띄우지 않으므로 화면을 그릴 때 물어도 된다.
+#[tauri::command]
+fn microphone_permission() -> MicPermission {
+    permission::status()
+}
+
+/// 시스템 설정의 마이크 항목을 연다. 한 번 거부하면 권한 창이 다시 안 뜬다.
+#[tauri::command]
+fn open_microphone_settings() -> Result<(), String> {
+    permission::open_settings()
+}
+
 #[tauri::command]
 fn list_input_devices() -> Result<Vec<InputDevice>, String> {
+    // **권한을 먼저 받아야 한다.** macOS는 권한 없는 앱에게 입력 장치를 숨기므로,
+    // 그냥 훑으면 빈 목록이 나오고 앱은 "마이크가 없다"고 판단한다. 그러면 녹음
+    // 버튼이 막혀 스트림을 열 일이 없고, 권한 창도 영영 뜨지 않는다 — 시스템
+    // 설정의 마이크 목록에 앱이 나타나지도 않는다.
+    //
+    // 이미 결정된 상태라면 창 없이 즉시 돌아온다.
+    let permission = permission::request();
+    if !permission.usable() {
+        return Ok(Vec::new());
+    }
     audio::input_devices()
 }
 
@@ -200,6 +224,8 @@ pub fn run() {
             list_ollama_models,
             pull_summarizer,
             list_input_devices,
+            microphone_permission,
+            open_microphone_settings,
             start_recording,
             stop_recording,
             recording_status,

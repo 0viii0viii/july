@@ -5,12 +5,16 @@
 //! 쓸 수 없다. 그래서 화자는 별도 파이프라인으로 구한다.
 //!
 //! speakrs가 pyannote community-1 파이프라인을 Rust로 구현한 것을 쓴다. 음성이
-//! 기기 밖으로 나가지 않는다는 전제는 그대로다 — 전부 로컬 추론이다. macOS는
-//! CoreML로 돌아서 19분 회의에 10초가 걸린다(실시간 대비 116배).
+//! 기기 밖으로 나가지 않는다는 전제는 그대로다 — 전부 로컬 추론이다. CoreML로
+//! 돌아서 19분 회의에 10초가 걸린다(실시간 대비 116배).
+//!
+//! **Apple Silicon에서만 동작한다.** ort-sys가 x86_64-apple-darwin용 사전 빌드
+//! 바이너리를 내놓지 않아 유니버설 빌드의 인텔 아치가 깨지고, 윈도우는 MKL
+//! 정적과 ONNX 정적이 겹쳐 rustc가 내부 패닉을 낸다. 그 외 플랫폼에서는
+//! `diarize`가 에러를 돌려주고 호출부는 화자 없이 진행한다 — 화자 없는
+//! 회의록이 회의록이 없는 것보다 낫다.
 
 use std::path::{Path, PathBuf};
-
-use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
 
 use crate::transcribe::Segment;
 
@@ -60,56 +64,78 @@ fn smooth(mut turns: Vec<Turn>) -> Vec<Turn> {
     out
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod imp {
+    use super::{smooth, label, Turn};
+    use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
+    use std::path::{Path, PathBuf};
+
+    /// whisper의 Metal/CPU 분기와 같은 이유로 CoreML을 쓴다.
+    const MODE: ExecutionMode = ExecutionMode::CoreMl;
+
+    pub fn ensure_models(models_dir: &Path) -> Result<PathBuf, String> {
+        let cache = models_dir.join("diarize");
+        speakrs::ModelManager::with_cache_dir(cache)
+            .map_err(|e| format!("화자분리 모델 저장소를 열 수 없습니다: {e}"))?
+            .ensure(MODE)
+            .map_err(|e| format!("화자분리 모델을 내려받을 수 없습니다: {e}"))
+    }
+
+    pub fn diarize(samples: &[f32], models_dir: &Path) -> Result<Vec<Turn>, String> {
+        let dir = ensure_models(models_dir)?;
+
+        let mut pipeline = OwnedDiarizationPipeline::from_dir(&dir, MODE)
+            .map_err(|e| format!("화자분리 모델을 불러올 수 없습니다: {e}"))?;
+
+        let result = pipeline
+            .run(samples)
+            .map_err(|e| format!("화자분리에 실패했습니다: {e}"))?;
+
+        // 겹쳐 말한 구간에서 화자를 하나로 정한다. 회의록에는 한 줄에 한 명이어야
+        // 읽히기 때문이다.
+        let mut exclusive = result.discrete_diarization.clone();
+        exclusive.make_exclusive();
+
+        let turns = exclusive
+            .to_segments()
+            .into_iter()
+            .map(|s| Turn {
+                start: s.start,
+                end: s.end,
+                speaker: label(&s.speaker),
+            })
+            .collect();
+
+        Ok(smooth(turns))
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+mod imp {
+    use super::Turn;
+    use std::path::{Path, PathBuf};
+
+    const UNSUPPORTED: &str = "이 플랫폼에서는 화자분리를 지원하지 않습니다.";
+
+    pub fn ensure_models(_models_dir: &Path) -> Result<PathBuf, String> {
+        Err(UNSUPPORTED.into())
+    }
+
+    pub fn diarize(_samples: &[f32], _models_dir: &Path) -> Result<Vec<Turn>, String> {
+        Err(UNSUPPORTED.into())
+    }
+}
+
 /// 화자분리 모델을 내려받고 저장된 위치를 돌려준다.
 ///
 /// whisper 모델과 같은 디렉터리 아래에 둔다. 이미 있으면 네트워크를 타지 않는다.
 pub fn ensure_models(models_dir: &Path) -> Result<PathBuf, String> {
-    let cache = models_dir.join("diarize");
-    speakrs::ModelManager::with_cache_dir(cache)
-        .map_err(|e| format!("화자분리 모델 저장소를 열 수 없습니다: {e}"))?
-        .ensure(execution_mode())
-        .map_err(|e| format!("화자분리 모델을 내려받을 수 없습니다: {e}"))
-}
-
-/// macOS는 CoreML, 그 외는 CPU. whisper의 Metal/CPU 분기와 같은 이유다.
-fn execution_mode() -> ExecutionMode {
-    #[cfg(target_os = "macos")]
-    {
-        ExecutionMode::CoreMl
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        ExecutionMode::Cpu
-    }
+    imp::ensure_models(models_dir)
 }
 
 /// 16kHz 모노 샘플에서 화자 구간을 뽑는다.
 pub fn diarize(samples: &[f32], models_dir: &Path) -> Result<Vec<Turn>, String> {
-    let dir = ensure_models(models_dir)?;
-
-    let mut pipeline = OwnedDiarizationPipeline::from_dir(&dir, execution_mode())
-        .map_err(|e| format!("화자분리 모델을 불러올 수 없습니다: {e}"))?;
-
-    let result = pipeline
-        .run(samples)
-        .map_err(|e| format!("화자분리에 실패했습니다: {e}"))?;
-
-    // 겹쳐 말한 구간에서 화자를 하나로 정한다. 회의록에는 한 줄에 한 명이어야
-    // 읽히기 때문이다.
-    let mut exclusive = result.discrete_diarization.clone();
-    exclusive.make_exclusive();
-
-    let turns = exclusive
-        .to_segments()
-        .into_iter()
-        .map(|s| Turn {
-            start: s.start,
-            end: s.end,
-            speaker: label(&s.speaker),
-        })
-        .collect();
-
-    Ok(smooth(turns))
+    imp::diarize(samples, models_dir)
 }
 
 /// 전사 세그먼트마다 화자를 붙인다.

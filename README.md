@@ -22,7 +22,7 @@
 |---|---|
 | 셸 | Tauri v2 (Rust + React) |
 | 전사 | whisper.cpp (`whisper-rs`, Metal 가속) |
-| 화자분리 | speakrs (pyannote community-1, CoreML 가속) |
+| 화자분리 | speakrs (pyannote community-1, CoreML) — Apple Silicon 전용 |
 | 요약 | Ollama `/api/generate` 또는 Anthropic Messages API |
 
 ## 준비
@@ -36,7 +36,7 @@ npm install
 받는다.
 
 - **음성 인식 모델** — 앱이 HuggingFace에서 직접 내려받는다 (진행률 표시)
-- **화자분리 모델** — 첫 전사 때 자동으로 받는다 (macOS CoreML 기준 약 320MB)
+- **화자분리 모델** — 첫 전사 때 자동으로 받는다 (약 320MB, Apple Silicon 전용)
 - **요약 모델** — 기기 메모리를 보고 맞는 것을 추천하고, Ollama의 `/api/pull`로
   앱 안에서 받는다
 
@@ -285,7 +285,12 @@ Mac mini·Mac Studio에는 내장 마이크가 없다. 앱은 이 경우를 감�
 한국어 회의에는 쓸 수 없다.
 
 **전부 로컬 추론이라 음성이 기기 밖으로 나가지 않는다는 전제는 그대로다.**
-macOS는 CoreML로 돌아서 19분 회의에 10초가 걸린다(실시간 대비 116배).
+CoreML로 돌아서 19분 회의에 10초가 걸린다(실시간 대비 116배).
+
+**Apple Silicon에서만 동작한다.** ort-sys가 x86_64-apple-darwin용 사전 빌드
+바이너리를 내놓지 않아 유니버설 빌드의 인텔 아치가 깨지고, 윈도우는 MKL 정적과
+ONNX 정적이 겹쳐 rustc가 내부 패닉을 낸다(`TryFromIntError(PosOverflow)`).
+인텔 맥과 윈도우에서는 화자 없이 전사만 된다.
 
 원시 출력에는 0.1초짜리 조각이 잔뜩 섞인다 — 맞장구나 숨소리가 다른 화자로
 튀는 것이다. 그대로 두면 한 문장 안에서 화자가 몇 번씩 바뀐 것처럼 보인다.

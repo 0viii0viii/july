@@ -41,10 +41,6 @@ symphonia = { version = "0.6.0", features = ["aac", "isomp4", "mp3", "alac"] }
 # 기본으로 뒀다. 느리지만 동작은 한다.
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
-# 화자분리도 같은 이유로 플랫폼을 나눈다. macOS는 CoreML로 실시간 대비 116배가
-# 나온다(19분 회의에 10초). ONNX Runtime과 LAPACK은 정적으로 링크되므로 따로
-# 번들할 동적 라이브러리가 없다.
-speakrs = { version = "0.5", features = ["coreml"] }
 # 마이크 권한을 명시적으로 요청한다. 이게 없으면 macOS가 입력 장치를 숨겨서
 # "마이크 없음"으로 보이고, 권한 창도 시스템 설정 목록도 영영 나타나지 않는다.
 objc2 = "0.6"
@@ -54,5 +50,15 @@ block2 = "0.6"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = "0.16.0"
-speakrs = "0.5"
+
+# 화자분리는 Apple Silicon에서만 붙인다.
+#
+# 다른 데서는 빌드가 안 된다. ort-sys가 x86_64-apple-darwin용 사전 빌드
+# 바이너리를 제공하지 않아서 유니버설 빌드의 인텔 아치가 죽고, 윈도우는 MKL
+# 정적과 ONNX 정적이 겹치면서 staticlib이 커져 rustc가 내부 패닉을 낸다
+# (TryFromIntError(PosOverflow)).
+#
+# 없는 플랫폼에서는 diarize가 에러를 돌려주고, 호출부는 화자 없이 진행한다.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+speakrs = { version = "0.5", features = ["coreml"] }
 

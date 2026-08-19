@@ -54,12 +54,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terms: std::env::var("JULY_TERMS").unwrap_or_default(),
     };
     let hint = context.as_speech_hint();
-    let result = transcribe::transcribe(
+    let mut result = transcribe::transcribe(
         &model_path,
         Path::new(&audio),
         Some("ko"),
         hint.as_deref(),
     )?;
+
+    // 앱과 같은 경로를 밟는다 — 여기서 빠지면 예제로 확인한 결과가 실제와 다르다.
+    let corrected = std::env::var("JULY_NO_TERM_FIX").is_err();
+    if corrected {
+        for seg in &mut result.segments {
+            seg.text = july_lib::terms::correct(&seg.text, &context.terms);
+        }
+    }
 
     for seg in &result.segments {
         println!("[{:>6.1}s → {:>6.1}s] {}", seg.start, seg.end, seg.text);

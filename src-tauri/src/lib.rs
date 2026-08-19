@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod setup;
 pub mod store;
 pub mod summarize;
+pub mod terms;
 pub mod transcribe;
 
 use std::path::PathBuf;
@@ -107,17 +108,27 @@ async fn transcribe_file(
 ) -> Result<Transcript, String> {
     let model_path = setup::model_path(&app, model);
     let audio_path = PathBuf::from(path);
-    let hint = context.and_then(|c| c.as_speech_hint());
+    let context = context.unwrap_or_default();
+    let hint = context.as_speech_hint();
+    let user_terms = context.terms.clone();
 
     // whisper 추론은 CPU/GPU를 오래 점유하는 블로킹 작업이다. 전용 스레드로
     // 보내지 않으면 그동안 UI 이벤트가 멈춘다.
     tauri::async_runtime::spawn_blocking(move || {
-        transcribe::transcribe(
+        let mut result = transcribe::transcribe(
             &model_path,
             &audio_path,
             language.as_deref(),
             hint.as_deref(),
-        )
+        )?;
+
+        // 힌트만으로는 부족하다. initial_prompt는 첫 윈도우 위주로 작용해서 긴
+        // 회의 뒤쪽에서 표기가 다시 흐트러진다. 세그먼트를 직접 고쳐두면 요약뿐
+        // 아니라 화면에 보이는 녹취록도 같이 정리된다.
+        for segment in &mut result.segments {
+            segment.text = terms::correct(&segment.text, &user_terms);
+        }
+        Ok(result)
     })
     .await
     .map_err(|e| format!("전사 작업이 중단되었습니다: {e}"))?

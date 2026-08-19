@@ -12,6 +12,8 @@
 ```
 녹음/파일
   → whisper.cpp 전사        (로컬, 무료, 오프라인)
+  → 화자분리                 (로컬, speakrs/pyannote)
+  → 용어 표기 교정           (로컬)
   → 요약                     (Ollama 로컬 · 또는 본인 Anthropic 키)
   → 회의록
 ```
@@ -20,6 +22,7 @@
 |---|---|
 | 셸 | Tauri v2 (Rust + React) |
 | 전사 | whisper.cpp (`whisper-rs`, Metal 가속) |
+| 화자분리 | speakrs (pyannote community-1, CoreML 가속) |
 | 요약 | Ollama `/api/generate` 또는 Anthropic Messages API |
 
 ## 준비
@@ -33,6 +36,7 @@ npm install
 받는다.
 
 - **음성 인식 모델** — 앱이 HuggingFace에서 직접 내려받는다 (진행률 표시)
+- **화자분리 모델** — 첫 전사 때 자동으로 받는다 (macOS CoreML 기준 약 320MB)
 - **요약 모델** — 기기 메모리를 보고 맞는 것을 추천하고, Ollama의 `/api/pull`로
   앱 안에서 받는다
 
@@ -86,6 +90,7 @@ ANTHROPIC_API_KEY=sk-ant-... \
 | `JULY_TOPIC` | 없음 | 회의 주제 |
 | `JULY_TERMS` | 없음 | 전문용어 (아래 참고) |
 | `JULY_NO_TERM_FIX` | 없음 | 값이 있으면 전사 후 용어 교정을 끈다 |
+| `JULY_NO_DIARIZE` | 없음 | 값이 있으면 화자분리를 끈다 |
 | `JULY_MODELS_DIR` | `../models` | whisper 모델 위치 |
 | `JULY_OLLAMA_MODEL` | `qwen3:8b` | 로컬 요약 모델 |
 | `JULY_ANTHROPIC_MODEL` | `claude-opus-5` | API 요약 모델 |
@@ -272,3 +277,23 @@ Mac mini·Mac Studio에는 내장 마이크가 없다. 앱은 이 경우를 감�
 > `fmt::Error`를 돌려주고, `to_string()`은 이걸 **패닉으로 바꾼다.** 입력
 > 장치가 없는 기기에서 앱 전체가 죽었다. 이름은 항상 `description()`으로
 > 읽어야 한다.
+
+## 화자분리
+
+전사가 끝나면 누가 언제 말했는지를 따로 구해서 세그먼트마다 붙인다. whisper의
+`speaker_turn` 필드는 tinydiarize 계열(영어 전용 small 모델)에서만 채워져서
+한국어 회의에는 쓸 수 없다.
+
+**전부 로컬 추론이라 음성이 기기 밖으로 나가지 않는다는 전제는 그대로다.**
+macOS는 CoreML로 돌아서 19분 회의에 10초가 걸린다(실시간 대비 116배).
+
+원시 출력에는 0.1초짜리 조각이 잔뜩 섞인다 — 맞장구나 숨소리가 다른 화자로
+튀는 것이다. 그대로 두면 한 문장 안에서 화자가 몇 번씩 바뀐 것처럼 보인다.
+그래서 0.4초 미만은 버리고, 같은 화자의 구간이 0.8초 이내로 붙어 있으면 잇는다.
+실측에서 구간 479개가 178개로 정리됐다.
+
+이게 요약에서 차이를 만든다. 화자를 모르면 녹취록이 한 사람이 쭉 말한 것으로
+보여서 액션 아이템 담당자가 전부 "미정"이 된다. 화자가 있으면 담당자가 붙는다.
+
+화자분리에 실패해도 전사는 버리지 않는다 — 화자 없는 회의록이 회의록이 없는
+것보다 낫다.

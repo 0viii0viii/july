@@ -54,12 +54,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         terms: std::env::var("JULY_TERMS").unwrap_or_default(),
     };
     let hint = context.as_speech_hint();
-    let mut result = transcribe::transcribe(
+    let audio_samples = july_lib::decode::decode_to_mono_16k(Path::new(&audio))?.samples;
+    let mut result = transcribe::transcribe_samples(
         &model_path,
-        Path::new(&audio),
+        &audio_samples,
         Some("ko"),
         hint.as_deref(),
     )?;
+
+    // 앱과 같은 경로. JULY_NO_DIARIZE=1 로 끄면 전후 비교를 할 수 있다.
+    if std::env::var("JULY_NO_DIARIZE").is_err() {
+        let dir = models_dir();
+        match july_lib::diarize::diarize(&audio_samples, &dir) {
+            Ok(turns) => {
+                eprintln!("화자 구간 {}개", turns.len());
+                july_lib::diarize::assign(&mut result.segments, &turns);
+            }
+            Err(e) => eprintln!("화자분리를 건너뜁니다: {e}"),
+        }
+    }
 
     // 앱과 같은 경로를 밟는다 — 여기서 빠지면 예제로 확인한 결과가 실제와 다르다.
     let corrected = std::env::var("JULY_NO_TERM_FIX").is_err();
@@ -70,7 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for seg in &result.segments {
-        println!("[{:>6.1}s → {:>6.1}s] {}", seg.start, seg.end, seg.text);
+        let who = seg.speaker.as_deref().unwrap_or("-");
+        println!("[{:>6.1}s → {:>6.1}s] {:<6} {}", seg.start, seg.end, who, seg.text);
     }
 
     let audio_seconds = result

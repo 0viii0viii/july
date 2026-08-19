@@ -41,7 +41,12 @@ symphonia = { version = "0.6.0", features = ["aac", "isomp4", "mp3", "alac"] }
 # 기본으로 뒀다. 느리지만 동작은 한다.
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
+# 화자분리도 같은 이유로 플랫폼을 나눈다. macOS는 CoreML로 실시간 대비 116배가
+# 나온다(19분 회의에 10초). ONNX Runtime과 LAPACK은 정적으로 링크되므로 따로
+# 번들할 동적 라이브러리가 없다.
+speakrs = { version = "0.5", features = ["coreml"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 whisper-rs = "0.16.0"
+speakrs = "0.5"
 

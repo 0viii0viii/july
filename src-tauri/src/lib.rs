@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod decode;
+pub mod diarize;
 pub mod catalog;
 pub mod setup;
 pub mod store;
@@ -107,6 +108,10 @@ async fn transcribe_file(
     context: Option<Context>,
 ) -> Result<Transcript, String> {
     let model_path = setup::model_path(&app, model);
+    let models_dir = model_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let audio_path = PathBuf::from(path);
     let context = context.unwrap_or_default();
     let hint = context.as_speech_hint();
@@ -115,12 +120,23 @@ async fn transcribe_file(
     // whisper 추론은 CPU/GPU를 오래 점유하는 블로킹 작업이다. 전용 스레드로
     // 보내지 않으면 그동안 UI 이벤트가 멈춘다.
     tauri::async_runtime::spawn_blocking(move || {
-        let mut result = transcribe::transcribe(
+        // 디코딩은 한 번만 한다 — 전사와 화자분리가 같은 샘플을 쓴다.
+        let audio = decode::decode_to_mono_16k(&audio_path)?.samples;
+
+        let mut result = transcribe::transcribe_samples(
             &model_path,
-            &audio_path,
+            &audio,
             language.as_deref(),
             hint.as_deref(),
         )?;
+
+        // 화자분리는 실패해도 전사를 버리지 않는다. 모델을 아직 못 받았거나
+        // 이 플랫폼에서 안 돌 수도 있는데, 화자 없는 회의록이 회의록이 없는
+        // 것보다 낫다.
+        match diarize::diarize(&audio, &models_dir) {
+            Ok(turns) => diarize::assign(&mut result.segments, &turns),
+            Err(e) => eprintln!("화자분리를 건너뜁니다: {e}"),
+        }
 
         // 힌트만으로는 부족하다. initial_prompt는 첫 윈도우 위주로 작용해서 긴
         // 회의 뒤쪽에서 표기가 다시 흐트러진다. 세그먼트를 직접 고쳐두면 요약뿐

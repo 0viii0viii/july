@@ -14,6 +14,10 @@ pub struct Segment {
     /// 종료 시각(초).
     pub end: f64,
     pub text: String,
+    /// 이 발언의 화자. `diarize`가 채운다. 화자분리를 돌리지 않았거나 화자
+    /// 구간에 걸치지 않으면 `None`이다 — 모르면 지어내지 않는다.
+    #[serde(default)]
+    pub speaker: Option<String>,
     /// 이 세그먼트 다음에 화자가 바뀌는지. tdrz 계열 모델에서만 채워지고
     /// 그 외 모델에서는 항상 false다.
     pub speaker_turn: bool,
@@ -28,13 +32,43 @@ pub struct Transcript {
 
 impl Transcript {
     /// 요약 모델에 넘길 평문. 타임스탬프는 뺀다.
+    ///
+    /// 화자를 알면 발언자별로 묶어서 내보낸다. 이게 없으면 요약 모델은 녹취록을
+    /// 한 사람이 쭉 말한 것으로 보게 되고, 액션 아이템의 담당자를 붙일 근거가
+    /// 사라진다. 연속된 같은 화자의 세그먼트는 한 발언으로 합친다.
     pub fn plain_text(&self) -> String {
-        self.segments
-            .iter()
-            .map(|s| s.text.trim())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut out = String::new();
+        let mut current: Option<&str> = None;
+
+        for segment in &self.segments {
+            let text = segment.text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            match segment.speaker.as_deref() {
+                Some(speaker) => {
+                    if current != Some(speaker) {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(speaker);
+                        out.push_str(": ");
+                        current = Some(speaker);
+                    } else {
+                        out.push(' ');
+                    }
+                }
+                // 화자를 모르면 예전처럼 이어 붙인다.
+                None => {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    current = None;
+                }
+            }
+            out.push_str(text);
+        }
+        out
     }
 }
 
@@ -60,6 +94,22 @@ pub fn transcribe(
     }
 
     let audio = crate::decode::decode_to_mono_16k(audio_path)?.samples;
+    transcribe_samples(model_path, &audio, language, hint)
+}
+
+/// 이미 디코딩된 16kHz 모노 샘플을 전사한다.
+///
+/// 화자분리가 같은 샘플을 다시 쓰기 때문에 디코딩을 호출부로 끌어냈다. 같은
+/// 파일을 두 번 디코딩하면 긴 회의에서 그만큼 더 기다린다.
+pub fn transcribe_samples(
+    model_path: &Path,
+    audio: &[f32],
+    language: Option<&str>,
+    hint: Option<&str>,
+) -> Result<Transcript, String> {
+    if !model_path.exists() {
+        return Err(format!("whisper 모델이 없습니다: {}", model_path.display()));
+    }
     let started = std::time::Instant::now();
 
     let ctx = WhisperContext::new_with_params(
@@ -93,7 +143,7 @@ pub fn transcribe(
     params.set_print_timestamps(false);
 
     state
-        .full(params, &audio)
+        .full(params, audio)
         .map_err(|e| format!("전사에 실패했습니다: {e}"))?;
 
     let n = state.full_n_segments();
@@ -115,6 +165,7 @@ pub fn transcribe(
             start: segment.start_timestamp() as f64 / 100.0,
             end: segment.end_timestamp() as f64 / 100.0,
             text: text.trim().to_string(),
+            speaker: None,
             speaker_turn: segment.next_segment_speaker_turn(),
         });
     }

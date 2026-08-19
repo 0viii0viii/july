@@ -6,19 +6,31 @@
 //! 됐다. 그래서 표기 교정은 전사가 끝난 뒤에 따로 한다. 후처리는 지정한 용어에만
 //! 국소적으로 작용하고 나머지 문장은 건드리지 않는다.
 //!
-//! 실제 회의 녹음(18분, 클라우드 인프라 주제)으로 임계값을 정했다. 그 녹음에서
-//! 영문 토큰 100개 중 44개가 교정 대상이었고 오교정은 0건이었다.
+//! **교정은 두 가지뿐이고, 둘 다 오교정이 구조적으로 불가능하다.**
 //!
-//! 한국어 고유명사 교정(자모 단위 근사 매칭)은 아직 없다. 같은 녹음에서 한국어
-//! 고유명사는 전부 정확했고("전북은행" 11회 중 11회), 임계값을 정할 오류 표본이
-//! 없었다. 검증 못 한 임계값으로 한국어를 건드리면 얻는 것보다 잃는 게 크다.
+//! 1. 알려진 용어의 대소문자 정규화 (`s3` → `S3`)
+//! 2. 확인된 오인식의 명시적 치환 (`vmure` → `VMware`)
+//!
+//! 근사 매칭(편집거리)은 시도했다가 버렸다. 실제 회의 세 건에서는 오교정이
+//! 0건으로 보였지만, 한국어 녹취록에 영어 단어가 드물어서 가려졌을 뿐이었다.
+//! 영어 사전 전체를 넣어보니 임계값에 따라 **50~1300개 단어가 잘못 교정됐다**
+//! — `abuse`→`Azure`, `adult`→`Vault`, `large`→`Argo`, `adapt`→`LDAP`.
+//! 실측한 오인식 `vmure`(거리 2)가 살아남는 설정은 전부 오교정 400건 이상이었고,
+//! 가장 조인 설정조차 20건이었다. 안전한 임계값이 없다.
+//!
+//! 별칭 방식이 잃는 게 없다는 게 중요하다. whisper의 오인식은 무작위가 아니라
+//! 체계적으로 반복된다 — `vmure`는 한 회의에서 16번 나왔다. 한 줄 추가가 오류
+//! 16개를 지운다. 새 오인식은 `termfix` 예제로 남은 영문 토큰을 훑어서 찾는다.
+//!
+//! 한국어 고유명사 교정은 아직 없다. 실측에서 한국어는 전부 정확했고
+//! ("전북은행" 11/11) 임계값을 정할 오류 표본이 없었다.
 
 use std::collections::HashMap;
 
-/// 클라우드 업계 표준 용어의 정답 표기.
+/// 업계 표준 용어의 정답 표기. 대소문자만 맞추는 데 쓴다.
 ///
-/// 축약형을 따로 넣는 게 중요하다. `Kubernetes`만 있으면 오인식된 `Qube`를 못
-/// 잡는다 — 편집거리가 너무 멀다. 사람들이 실제로 말하는 `Kube`가 있어야 걸린다.
+/// 같은 용어가 `s3`/`S3`/`S3.`로 갈리면 요약 모델이 다른 것으로 취급한다.
+/// 실제 회의 한 건에서 이 정규화만으로 25건이 정리됐다.
 const CATALOG: &[&str] = &[
     // 가상화
     "VMware", "vCenter", "vSphere", "ESXi", "vMotion", "vSAN", "OVF", "OVA",
@@ -28,27 +40,29 @@ const CATALOG: &[&str] = &[
     // 퍼블릭 클라우드
     "AWS", "EC2", "S3", "RDS", "EKS", "ECS", "VPC", "IAM", "EBS", "ELB",
     "Lambda", "CloudFront", "Route53", "Azure", "GCP", "NCP", "NKS",
+    // CI/CD·형상관리
+    "Jenkins", "ArgoCD", "GitLab", "GitHub", "Git", "npm", "Gradle",
+    "Maven", "Nexus", "SonarQube", "Harbor", "CI", "CD", "CICD",
     // 운영·도구
-    "Terraform", "Ansible", "Jenkins", "GitLab", "Prometheus", "Grafana",
-    "CMP", "CSP", "MSP", "SaaS", "PaaS", "IaaS", "DevOps",
-    // 인프라
+    "Terraform", "Ansible", "Prometheus", "Grafana", "Vault", "Nginx",
+    "Redis", "Kafka", "MySQL", "PostgreSQL", "MongoDB", "Elasticsearch",
+    "CMP", "CSP", "MSP", "SaaS", "PaaS", "IaaS", "IaC", "DevOps", "SRE",
+    // 인프라·네트워크
     "GPU", "CPU", "RAM", "SSD", "NAS", "SAN", "CDN", "DNS", "NAT", "ACL",
-    "VPN", "WAF", "LDAP", "SSO", "MFA",
+    "VPN", "WAF", "LDAP", "SSO", "MFA", "SSL", "TLS", "SSH", "HTTP", "HTTPS",
     // 일반
-    "API", "SDK", "CLI", "SLA", "PoC", "SMS", "SNS",
+    "API", "SDK", "CLI", "SLA", "PoC", "SMS", "SNS", "KPI", "QA", "UI", "UX",
 ];
 
-/// 퍼지 매칭에 넣을 최소 길이.
+/// 실제 녹음에서 확인한 오인식 → 정답 표기.
 ///
-/// **이 값이 결정적인 가드다.** 3으로 내리면 영어 단어 `open`이 `VPN`으로 바뀐다
-/// (실측). 짧은 토큰은 무관한 단어와 편집거리가 가까워서 손대면 안 된다.
-const FUZZY_MIN_LEN: usize = 4;
-
-/// 허용할 최대 편집거리. 3으로 올려도 새로 잡히는 게 하나도 없었다.
-const MAX_DIST: usize = 2;
-
-/// 편집거리를 긴 쪽 길이로 나눈 비율의 상한. 길이 가드와 함께 쓰면 여유가 있다.
-const MAX_RATIO: f32 = 0.45;
+/// 영어 단어와 겹치지 않는 것만 넣는다. 겹치면 그 단어를 말했을 때 망가진다.
+/// 왼쪽은 대소문자를 구분하지 않고 비교한다.
+const ALIASES: &[(&str, &str)] = &[
+    // 전북은행 회의(18분)에서 16번 연속으로 이렇게 나왔다.
+    ("vmure", "VMware"),
+    ("Qube", "Kube"),
+];
 
 /// 사용자가 쉼표나 공백으로 적어준 용어에서 라틴 문자 항목만 뽑는다.
 ///
@@ -67,50 +81,23 @@ fn user_latin_terms(terms: &str) -> Vec<String> {
         .collect()
 }
 
-fn levenshtein(a: &[u8], b: &[u8]) -> usize {
-    let (m, n) = (a.len(), b.len());
-    let mut prev: Vec<usize> = (0..=n).collect();
-    let mut cur = vec![0usize; n + 1];
-    for i in 1..=m {
-        cur[0] = i;
-        for j in 1..=n {
-            let sub = prev[j - 1] + usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(sub);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[n]
-}
-
 /// 이 토큰을 어떤 정답 표기로 바꿔야 하는지 찾는다. 바꿀 필요가 없으면 `None`.
+///
+/// 두 단계 모두 **알려진 문자열과 정확히 일치할 때만** 동작한다. 모르는 토큰은
+/// 절대 건드리지 않는다 — 이게 오교정이 불가능한 이유다.
 fn canonical_for(token: &str, catalog: &[String], lookup: &HashMap<String, usize>) -> Option<String> {
     let lower = token.to_ascii_lowercase();
 
-    // 1단계 — 표기 분열 정리. 같은 용어가 s3/S3/S3. 로 갈리면 요약 모델이 다른
-    // 것으로 취급한다. 알려진 용어의 대소문자만 맞추는 것이라 오교정이 구조적으로
-    // 불가능하다.
+    // 1단계 — 표기 분열 정리.
     if let Some(&i) = lookup.get(&lower) {
         return (catalog[i] != token).then(|| catalog[i].clone());
     }
 
-    // 2단계 — 오인식 교정. whisper가 영문 용어를 음차로 뭉갠 경우다.
-    if token.len() < FUZZY_MIN_LEN {
-        return None;
-    }
-    let mut best: Option<(&str, usize)> = None;
-    for term in catalog {
-        if term.len() < FUZZY_MIN_LEN {
-            continue;
-        }
-        let d = levenshtein(lower.as_bytes(), term.to_ascii_lowercase().as_bytes());
-        if d > MAX_DIST || d as f32 / token.len().max(term.len()) as f32 > MAX_RATIO {
-            continue;
-        }
-        if best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((term, d));
-        }
-    }
-    best.map(|(t, _)| t.to_string())
+    // 2단계 — 확인된 오인식 치환.
+    ALIASES
+        .iter()
+        .find(|(wrong, _)| wrong.eq_ignore_ascii_case(token))
+        .map(|(_, right)| (*right).to_string())
 }
 
 /// 녹취록의 영문 용어 표기를 바로잡는다.
@@ -177,16 +164,34 @@ mod tests {
         assert_eq!(correct("vmure에 로그인했었던", ""), "VMware에 로그인했었던");
     }
 
-    /// 축약형이 카탈로그에 있어야 잡힌다. Kubernetes만으론 거리가 멀다.
     #[test]
-    fn fixes_short_form_via_catalog() {
+    fn fixes_aliased_short_form() {
         assert_eq!(correct("Qube 클러스터", ""), "Kube 클러스터");
     }
 
-    /// 회귀 방지 — 최소길이를 3으로 내리면 이게 VPN으로 바뀐다.
+    /// **가장 중요한 회귀 테스트.**
+    ///
+    /// 근사 매칭을 쓰던 때 이 단어들이 전부 잘못 교정됐다. 편집거리 매칭을 다시
+    /// 들이면 여기서 걸린다. 영어 사전 전체로 재보니 임계값에 따라 50~1300개
+    /// 단어가 이런 식으로 망가졌다.
     #[test]
-    fn leaves_ordinary_english_word_alone() {
-        assert_eq!(correct("open 상태로 두죠", ""), "open 상태로 두죠");
+    fn never_touches_ordinary_english_words() {
+        for w in ["large", "abuse", "adult", "adapt", "amen", "aging", "arable",
+                  "open", "help", "cube", "acute", "adore", "allure"] {
+            assert_eq!(correct(w, ""), w, "{w} 를 건드렸다");
+        }
+    }
+
+    /// 카탈로그에 없고 별칭에도 없는 토큰은 그대로 둔다.
+    #[test]
+    fn leaves_unknown_tokens_alone() {
+        assert_eq!(correct("PMPM 이랑 ROG 얘기", ""), "PMPM 이랑 ROG 얘기");
+    }
+
+    /// cicd 회의에서 확인한 표기 분열.
+    #[test]
+    fn normalizes_cicd_vocabulary() {
+        assert_eq!(correct("K8S 에 IAC 로 NPM 설치", ""), "K8s 에 IaC 로 npm 설치");
     }
 
     /// 한국어는 건드리지 않는다. 조사가 붙어도 마찬가지다.

@@ -7,6 +7,7 @@
 //! 수천 건이다. 파일 하나면 충분하고, 사용자가 직접 열어보거나 백업하기도
 //! 쉽다.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,15 @@ pub struct Meeting {
     pub audio_path: Option<String>,
     pub duration: f64,
     pub segments: Vec<Segment>,
+    /// 이 회의의 화자 라벨("화자 1")이 명단의 누구인지. 사용자가 지정한다.
+    ///
+    /// 회의마다 따로 두는 이유는 화자분리가 회의마다 번호를 새로 매기기
+    /// 때문이다 — 어제의 "화자 1"과 오늘의 "화자 1"은 다른 사람이다.
+    ///
+    /// 이름이 아니라 id를 담는다. 명단에서 이름을 고쳐도 지난 회의의 연결이
+    /// 그대로 따라오게 하려는 것이다. 지정하지 않은 화자는 여기 없다.
+    #[serde(default)]
+    pub speakers: BTreeMap<String, String>,
     /// 요약 마크다운. 요약 단계에서 실패했으면 None.
     #[serde(default)]
     pub summary: Option<String>,

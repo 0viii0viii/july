@@ -60,7 +60,17 @@ fn open_microphone_settings() -> Result<(), String> {
     permission::open_settings()
 }
 
-#[tauri::command]
+/// **`async`가 아니라 `(async)`인 것이 중요하다.**
+///
+/// tauri의 `#[tauri::command]`는 기본이 `ExecutionContext::Blocking`이라 동기
+/// 함수를 **메인 스레드에서** 실행한다. 그런데 `permission::request()`는 사용자가
+/// 권한 창에 답할 때까지 최대 60초를 기다린다. 메인 스레드가 막히면 런루프가
+/// 돌지 못하고, 런루프가 멈추면 macOS가 그 권한 창을 띄우지 못한다 — 띄워야
+/// 풀리는 것을 띄우지 못해 60초를 기다렸다가 "미결정"으로 돌아오는 교착이다.
+///
+/// 0.1.11에서 이 교착 때문에 권한 창이 아예 뜨지 않았다. `(async)`를 붙이면
+/// 블로킹 스레드풀에서 돌아 메인 런루프가 계속 살아 있다.
+#[tauri::command(async)]
 fn list_input_devices() -> Result<Vec<InputDevice>, String> {
     // **권한을 먼저 받아야 한다.** macOS는 권한 없는 앱에게 입력 장치를 숨기므로,
     // 그냥 훑으면 빈 목록이 나오고 앱은 "마이크가 없다"고 판단한다. 그러면 녹음

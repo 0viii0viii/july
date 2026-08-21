@@ -209,6 +209,46 @@ python3 scripts/gen_test_audio.py    # → testdata/meeting_ko.wav (+ 정답 대
 1,719자에 1,175초, 한 번에 넘기니 1,809자에 322초였다. 네 배 느리고 결과는
 조금 짧았다. 그래서 **나누는 건 상한을 넘을 때뿐**이다.
 
+## 마이크가 목록에 나타나지 않던 문제
+
+0.1.11에 마이크 권한 요청을 넣었는데도 시스템 설정 → 개인정보 보호 및 보안 →
+마이크에 July가 나타나지 않았다. 권한 창도 뜨지 않았다.
+
+원인은 **하드닝된 런타임에 마이크 엔타이틀먼트가 없었던 것**이다.
+
+```
+flags=0x10002(adhoc,runtime)   ← tauri가 signingIdentity "-"로 서명하며 runtime을 켠다
+엔타이틀먼트                     없음
+```
+
+하드닝된 런타임에서는 `com.apple.security.device.audio-input` 없이 마이크를
+요청하면 macOS가 **창도 띄우지 않고 즉시 거부한다.** TCC 데이터베이스에 거부
+기록조차 남기지 않아서, 앱이 요청한 적이 없는 것과 구분되지 않는다.
+
+`Info.plist`의 `NSMicrophoneUsageDescription`은 창이 뜰 때 보여줄 문구일 뿐이고,
+코드에서 `requestAccessForMediaType`을 부르는 것도 소용없다. 엔타이틀먼트가
+먼저다.
+
+TCC 데이터베이스로 확인한 결과:
+
+| 빌드 | `tccutil reset` 직후 | 앱 실행 후 |
+|---|---|---|
+| 엔타이틀먼트 없음 | 0건 | **0건** |
+| 엔타이틀먼트 있음 | 0건 | `com.heon.july auth=2` |
+
+### 여기서 헛짚었던 것
+
+처음에는 tauri의 `#[tauri::command]`가 기본으로 동기 함수를 메인 스레드에서
+실행한다는 점(`tauri-macros/src/command/wrapper.rs`의 `ExecutionContext::Blocking`)에
+주목해, 권한 응답을 60초 기다리는 동안 런루프가 멈춰 창이 못 뜨는 교착이라고
+봤다. **틀렸다.** 수정 전 빌드를 `sample`로 떠보니 메인 스레드는 멀쩡히
+`CFRunLoopRun`에 있었다.
+
+다만 `list_input_devices`는 `#[tauri::command(async)]`로 남겨뒀다. 사용자가
+권한 창에 답하는 동안 UI를 붙잡는 건 실재하는 문제고, 창이 뜨지 않아 드러나지
+않았을 뿐이다. `permission::request()`에도 메인 스레드면 기다리지 않고 물러나는
+안전장치를 뒀다.
+
 ## 배포
 
 `v`로 시작하는 태그를 push하면 GitHub Actions가 macOS·Windows 설치파일을

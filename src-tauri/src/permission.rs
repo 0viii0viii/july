@@ -41,6 +41,7 @@ mod imp {
     use objc2_av_foundation::{
         AVAuthorizationStatus, AVCaptureDevice, AVMediaType, AVMediaTypeAudio,
     };
+    use objc2_foundation::NSThread;
 
     /// 프레임워크가 제공하는 전역 상수. 링크만 되면 항상 값이 있다.
     fn media_type() -> &'static AVMediaType {
@@ -81,6 +82,22 @@ mod imp {
                 media_type(),
                 &handler,
             );
+        }
+
+        // **메인 스레드에서는 기다리면 안 된다.**
+        //
+        // 권한 창을 띄우는 것도 메인 런루프의 일이다. 여기서 메인 스레드를
+        // 붙잡으면 런루프가 멈춰 창이 뜨지 못하고, 창이 떠야 풀리는 것을 띄우지
+        // 못해 시간만 흘려보낸다. 0.1.11이 정확히 이 교착에 빠져 있었다.
+        //
+        // 요청은 이미 넣었으니 런루프가 다시 돌면 창은 뜬다. 여기서는 기다리지
+        // 않고 물러난다 — 호출한 쪽은 다음 번에 결과를 보게 된다.
+        if NSThread::isMainThread_class() {
+            eprintln!(
+                "마이크 권한을 메인 스레드에서 요청했습니다. \
+                 기다리지 않고 넘어갑니다 — 명령을 #[tauri::command(async)]로 두세요."
+            );
+            return MicPermission::NotDetermined;
         }
 
         // 사용자가 창을 그냥 두는 경우가 있다. 무한정 붙잡고 있으면 호출한

@@ -155,6 +155,13 @@ fn build_prompt(body: &str, context: &Context, source: Source) -> String {
     // 화자분리를 거친 녹취록은 "화자 1: ..." 형태로 들어온다. 모델이 이걸
     // 실제 이름과 연결할 수 있게 규칙을 준다 — 참석자 명단이 없으면 연결할
     // 근거가 없으므로 번호를 그대로 두게 한다.
+    //
+    // 이름이 이미 붙어 있는 줄은 사용자가 명단에서 직접 지정한 것이다. 그건
+    // 추측이 아니라 확인된 사실이므로 모델이 다시 손대지 못하게 못을 박는다.
+    // 이 문장이 없으면 모델이 발언 내용을 보고 "이 사람이 아닌 것 같다"며
+    // 이름을 바꿔버리는 일이 생긴다.
+    let confirmed_rule = "- 이름이 붙어 있는 발언은 그 사람이 말한 것으로 이미 \
+                          확인된 것입니다. 다른 이름으로 바꾸지 마세요.\n";
     let speaker_rule = if context.attendees.trim().is_empty() {
         "- 녹취록의 '화자 1', '화자 2'는 서로 다른 참석자입니다. 누구인지 알 수 \
          없으므로 그대로 두세요.\n"
@@ -211,6 +218,7 @@ fn build_prompt(body: &str, context: &Context, source: Source) -> String {
          규칙:\n\
          - {source_word}에 없는 내용을 지어내지 마세요.\n\
          {speaker_rule}\
+         {confirmed_rule}\
          {owner_rule}\
          - 결론이 나지 않은 채 끝난 논의도 '결론 없이 종료'라고 밝혀 남기세요. \
          결정된 것만 골라 적으면 회의록이 실제보다 매끄러워 보입니다.\n\

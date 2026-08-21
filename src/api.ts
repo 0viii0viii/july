@@ -79,6 +79,14 @@ export type Segment = {
   start: number;
   end: number;
   text: string;
+  /**
+   * 화자분리가 붙인 라벨("화자 1"). 화자분리를 돌리지 않았거나 어느 화자
+   * 구간에도 걸치지 않으면 null이다 — 모르면 지어내지 않는다.
+   *
+   * 이건 회의 안에서만 유효한 번호다. 어제의 "화자 1"과 오늘의 "화자 1"은
+   * 다른 사람이다. 사람과 잇는 것은 `Meeting.speakers`가 한다.
+   */
+  speaker: string | null;
   speaker_turn: boolean;
 };
 
@@ -144,6 +152,57 @@ export const summarizeText = (
   context: Context | null,
 ) => invoke<string>("summarize_text", { backend, transcript, context });
 
+/**
+ * 요약 모델에 넘길 녹취록 평문을 만든다.
+ *
+ * 화면에서 이어 붙이지 않고 Rust를 거치는 이유는 화자를 사람 이름으로 바꾸는
+ * 규칙이 한 곳에만 있어야 하기 때문이다. 화면에 보이는 이름과 모델이 받는
+ * 이름이 어긋나면 요약의 담당자가 왜 그렇게 나왔는지 설명할 수 없게 된다.
+ */
+export const transcriptText = (
+  segments: Segment[],
+  speakers: Record<string, string>,
+) => invoke<string>("transcript_text", { segments, speakers });
+
+// ---------------------------------------------------------------- 사내 명단
+
+/**
+ * 명단에 등록된 한 사람.
+ *
+ * 회의마다 참석자 이름을 다시 치지 않게 하려는 것이고, `manager`로 조직도를
+ * 그린다. 목소리는 아직 여기 없다 — 화자는 사람이 직접 지정한다.
+ */
+export type Person = {
+  /** 앱이 발급한다. 새로 만들 때는 빈 문자열로 보낸다. */
+  id: string;
+  name: string;
+  team: string;
+  title: string;
+  /** 상위자 id. 최상위이거나 모르면 null. */
+  manager: string | null;
+};
+
+export const EMPTY_PERSON: Person = {
+  id: "",
+  name: "",
+  team: "",
+  title: "",
+  manager: null,
+};
+
+/** 요약 모델과 화면에 쓰는 표기. Rust의 `Person::display`와 같아야 한다. */
+export const personLabel = (p: Person) =>
+  p.title.trim() ? `${p.name}(${p.title.trim()})` : p.name;
+
+export const listPeople = () => invoke<Person[]>("list_people");
+
+/** 저장된 결과를 돌려준다 — 새로 만들면 발급된 id가 여기 들어 있다. */
+export const savePerson = (person: Person) =>
+  invoke<Person>("save_person", { person });
+
+export const deletePerson = (id: string) =>
+  invoke<void>("delete_person", { id });
+
 /** 보관된 회의 한 건. */
 export type Meeting = {
   id: string;
@@ -152,6 +211,13 @@ export type Meeting = {
   audio_path: string | null;
   duration: number;
   segments: Segment[];
+  /**
+   * 화자 라벨("화자 1") → 명단의 사람 id.
+   *
+   * 이름이 아니라 id를 담는다. 명단에서 이름을 고쳐도 지난 회의의 연결이
+   * 따라오게 하려는 것이다. 지정하지 않은 화자는 여기 없다.
+   */
+  speakers: Record<string, string>;
   summary: string | null;
   context: Context;
 };

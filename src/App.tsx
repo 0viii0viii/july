@@ -7,6 +7,7 @@ import {
   EMPTY_CONTEXT,
   bucketOf,
   deleteMeeting,
+  deletePerson,
   downloadModel,
   formatClock,
   formatFullDate,
@@ -18,16 +19,20 @@ import {
   openMicrophoneSettings,
   type MicPermission,
   listMeetings,
+  listPeople,
   localIso,
   localStamp,
+  personLabel,
   pullSummarizer,
   recordingStatus,
   renameMeeting,
   saveMeeting,
+  savePerson,
   startRecording,
   stopRecording,
   summarizeText,
   transcribeFile,
+  transcriptText,
   type Backend,
   type Context,
   type DownloadProgress,
@@ -36,6 +41,7 @@ import {
   type Meeting,
   type MeetingBrief,
   type ModelSize,
+  type Person,
   type PullProgress,
   type RecordingStatus,
 } from "./api";
@@ -43,6 +49,7 @@ import { Brief } from "./Brief";
 import { Config, DEFAULT_SETTINGS, type Settings } from "./Config";
 import { Gate } from "./Gate";
 import { Minutes } from "./Minutes";
+import { Roster } from "./Roster";
 import { Updater } from "./Updater";
 import "./App.css";
 
@@ -138,6 +145,14 @@ export default function App() {
   const [showRaw, setShowRaw] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 명단은 회의와 독립적으로 산다 — 한 번 등록해두고 계속 쓴다.
+  const [people, setPeople] = useState<Person[]>([]);
+  const [showRoster, setShowRoster] = useState(false);
+  const [rosterBusy, setRosterBusy] = useState(false);
+  // 명단 오류는 명단 안에서 보여준다. 전체 알림줄에 띄우면 시트에 가려 보이지
+  // 않는다.
+  const [rosterError, setRosterError] = useState<string | null>(null);
+
   useEffect(() => {
     localStorage.setItem(STORE_KEY, JSON.stringify(settings));
   }, [settings]);
@@ -157,11 +172,16 @@ export default function App() {
     setMeetings(await listMeetings().catch(() => []));
   }, []);
 
+  const refreshPeople = useCallback(async () => {
+    setPeople(await listPeople().catch(() => []));
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
         await refreshEnv();
         await refreshList();
+        await refreshPeople();
         setDevices(await listInputDevices().catch(() => []));
         setMicPermission(
           await microphonePermission().catch<MicPermission>(() => "not_required"),
@@ -173,7 +193,7 @@ export default function App() {
         setPhase("idle");
       }
     })();
-  }, [refreshEnv, refreshList]);
+  }, [refreshEnv, refreshList, refreshPeople]);
 
   useEffect(() => {
     const stops = [
@@ -256,6 +276,8 @@ export default function App() {
           audio_path: audioPath,
           duration: result.segments[result.segments.length - 1]?.end ?? 0,
           segments: result.segments,
+          // 화자는 아직 번호뿐이다. 회의록을 열어 명단에서 지정하면 채워진다.
+          speakers: {},
           summary: null,
           context,
         };
@@ -268,9 +290,12 @@ export default function App() {
 
       try {
         setPhase("summarizing");
+        // 세그먼트를 그냥 이어 붙이면 안 된다. 그러면 화자분리 결과가 통째로
+        // 버려져서 요약 모델이 회의를 한 사람의 독백으로 읽고, 액션 아이템에
+        // 담당자를 붙일 근거가 사라진다.
         meeting.summary = await summarizeText(
           backend,
-          meeting.segments.map((s) => s.text).join(" "),
+          await transcriptText(meeting.segments, meeting.speakers),
           context,
         );
       } catch (e) {
@@ -418,6 +443,92 @@ export default function App() {
     }
   }, [current, refreshList]);
 
+  const onSavePerson = useCallback(
+    async (person: Person) => {
+      setRosterBusy(true);
+      setRosterError(null);
+      try {
+        await savePerson(person);
+        await refreshPeople();
+        return true;
+      } catch (e) {
+        // 실패를 알리고 편집기를 열어 둔다. 닫아버리면 입력한 내용이 사라진다.
+        setRosterError(String(e));
+        return false;
+      } finally {
+        setRosterBusy(false);
+      }
+    },
+    [refreshPeople],
+  );
+
+  const onDeletePerson = useCallback(
+    async (id: string) => {
+      setRosterBusy(true);
+      setRosterError(null);
+      try {
+        await deletePerson(id);
+        await refreshPeople();
+      } catch (e) {
+        setRosterError(String(e));
+      } finally {
+        setRosterBusy(false);
+      }
+    },
+    [refreshPeople],
+  );
+
+  /**
+   * 화자에 사람을 붙인다. 빈 값이면 지정을 뗀다.
+   *
+   * 바로 저장하는 이유는 이게 한 번 지정하면 끝나는 정보이기 때문이다 — 따로
+   * 저장 버튼을 두면 눌러야 하는 줄 모르고 나갔다가 지정이 날아간다.
+   */
+  const onAssignSpeaker = useCallback(
+    async (label: string, personId: string) => {
+      if (!current) return;
+      const speakers = { ...(current.speakers ?? {}) };
+      if (personId) speakers[label] = personId;
+      else delete speakers[label];
+
+      const next = { ...current, speakers };
+      setCurrent(next);
+      try {
+        await saveMeeting(next);
+      } catch (e) {
+        setError(`화자 지정을 저장하지 못했습니다: ${e}`);
+      }
+    },
+    [current],
+  );
+
+  /**
+   * 지금 붙어 있는 이름으로 회의록을 다시 만든다.
+   *
+   * 화자를 지정해도 이미 만들어진 회의록은 그대로다 — 요약은 지정 전에 돌았기
+   * 때문이다. 다시 돌려야 "화자 2"가 "박민수(주임)"로 바뀐다.
+   */
+  const onResummarize = useCallback(async () => {
+    if (!current) return;
+    setError(null);
+    setPhase("summarizing");
+    try {
+      const summary = await summarizeText(
+        backend,
+        await transcriptText(current.segments, current.speakers ?? {}),
+        current.context,
+      );
+      const next = { ...current, summary };
+      setCurrent(next);
+      await saveMeeting(next);
+      await refreshList();
+    } catch (e) {
+      setError(`다시 요약하지 못했습니다: ${e}`);
+    } finally {
+      setPhase("idle");
+    }
+  }, [backend, current, refreshList]);
+
   const onDownloadModel = useCallback(
     async (model: ModelSize) => {
       setBusy(true);
@@ -487,6 +598,32 @@ export default function App() {
   // 할 일은 전혀 다르다 — 하나는 마이크를 꽂는 것이고 하나는 설정을 켜는 것이다.
   const micBlocked = micPermission === "denied";
   const noMic = devices.length === 0 && !micBlocked;
+
+  /**
+   * 이 회의에 등장한 화자 라벨. 처음 말한 순서대로.
+   *
+   * 정렬하지 않고 등장 순서를 쓰는 이유는, 회의를 연 사람이 대개 첫 화자라서
+   * 목록의 첫 줄부터 지정해 내려가는 것이 자연스럽기 때문이다.
+   */
+  const cast = useMemo(() => {
+    const seen: string[] = [];
+    for (const segment of current?.segments ?? []) {
+      if (segment.speaker && !seen.includes(segment.speaker)) {
+        seen.push(segment.speaker);
+      }
+    }
+    return seen;
+  }, [current]);
+
+  /** 화자 라벨을 화면에 쓸 이름으로. 지정하지 않았으면 라벨 그대로. */
+  const speakerName = useCallback(
+    (label: string) => {
+      const id = current?.speakers?.[label];
+      // 명단에서 지워진 사람을 가리키고 있을 수 있다. 그러면 라벨로 돌아간다.
+      return people.find((p) => p.id === id)?.name ?? label;
+    },
+    [current, people],
+  );
 
   // 목록을 오늘/어제/이번 주/지난 기록으로 묶는다.
   const grouped = useMemo(() => {
@@ -579,6 +716,9 @@ export default function App() {
                 든다. 항상 보이게 둔다. */}
             <em className="ver">v{__APP_VERSION__}</em>
           </span>
+          <button className="icon-btn" onClick={() => setShowRoster(true)}>
+            명단
+          </button>
           <button className="icon-btn" onClick={() => setShowConfig(true)}>
             설정
           </button>
@@ -711,6 +851,70 @@ export default function App() {
               </div>
             </header>
 
+            {/*
+              화자에 이름을 붙이는 자리.
+
+              전사 원문 안에 두지 않고 회의록 위에 둔다. 원문은 접혀 있어서
+              펼쳐본 사람만 지정하게 되는데, 이름을 붙이는 건 접힌 곳에 숨겨둘
+              일이 아니다 — 붙여야 요약의 담당자가 사람 이름이 된다.
+            */}
+            {cast.length > 0 && (
+              <section className="cast">
+                <div className="cast-head">
+                  <span className="cast-title">화자</span>
+                  <button
+                    className="icon-btn"
+                    onClick={() => setShowRoster(true)}
+                  >
+                    명단 관리
+                  </button>
+                </div>
+
+                {people.length === 0 ? (
+                  <p className="cast-hint">
+                    명단에 사람을 등록하면 여기서 화자에 이름을 붙일 수 있습니다.
+                    한 번 등록해두면 다음 회의부터는 고르기만 하면 됩니다.
+                  </p>
+                ) : (
+                  <>
+                    <div className="cast-rows">
+                      {cast.map((label) => (
+                        <label className="cast-row" key={label}>
+                          <span className="cast-label">{label}</span>
+                          <select
+                            value={current.speakers?.[label] ?? ""}
+                            onChange={(e) =>
+                              void onAssignSpeaker(label, e.target.value)
+                            }
+                          >
+                            <option value="">지정 안 함</option>
+                            {people.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {personLabel(p)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="cast-foot">
+                      <button
+                        className="btn btn--quiet"
+                        onClick={() => void onResummarize()}
+                        disabled={!canSummarize}
+                      >
+                        이 이름으로 다시 요약
+                      </button>
+                      <span className="cast-hint">
+                        회의록은 이름을 붙이기 전에 만들어졌습니다. 다시 요약해야
+                        담당자에 이름이 들어갑니다.
+                      </span>
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
+
             {current.summary ? (
               <Minutes markdown={current.summary} />
             ) : (
@@ -743,6 +947,21 @@ export default function App() {
                   {current.segments.map((s, i) => (
                     <li key={i}>
                       <time>{formatClock(s.start)}</time>
+                      {/*
+                        앞 줄과 같은 사람이면 이름을 반복하지 않는다. 줄마다
+                        이름이 붙으면 대화가 아니라 표로 보인다.
+
+                        비어 있어도 자리는 남긴다 — 이어지는 줄에서 칸이
+                        사라지면 본문이 좌우로 널뛴다.
+                      */}
+                      {cast.length > 0 && (
+                        <b className="reel-who">
+                          {s.speaker &&
+                          s.speaker !== current.segments[i - 1]?.speaker
+                            ? speakerName(s.speaker)
+                            : ""}
+                        </b>
+                      )}
                       <span>{s.text}</span>
                     </li>
                   ))}
@@ -777,6 +996,20 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {showRoster && (
+        <Roster
+          people={people}
+          busy={rosterBusy}
+          error={rosterError}
+          onSave={onSavePerson}
+          onDelete={onDeletePerson}
+          onClose={() => {
+            setShowRoster(false);
+            setRosterError(null);
+          }}
+        />
+      )}
 
       {showConfig && (
         <Config

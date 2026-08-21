@@ -2,6 +2,7 @@
 //!
 //! 오디오는 전부 이 머신에서 처리한다 — 네트워크로 나가는 게 없다.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -30,46 +31,54 @@ pub struct Transcript {
     pub elapsed: f64,
 }
 
-impl Transcript {
-    /// 요약 모델에 넘길 평문. 타임스탬프는 뺀다.
-    ///
-    /// 화자를 알면 발언자별로 묶어서 내보낸다. 이게 없으면 요약 모델은 녹취록을
-    /// 한 사람이 쭉 말한 것으로 보게 되고, 액션 아이템의 담당자를 붙일 근거가
-    /// 사라진다. 연속된 같은 화자의 세그먼트는 한 발언으로 합친다.
-    pub fn plain_text(&self) -> String {
-        let mut out = String::new();
-        let mut current: Option<&str> = None;
+/// 요약 모델에 넘길 평문. 타임스탬프는 뺀다.
+///
+/// 화자를 알면 발언자별로 묶어서 내보낸다. 이게 없으면 요약 모델은 녹취록을
+/// 한 사람이 쭉 말한 것으로 보게 되고, 액션 아이템의 담당자를 붙일 근거가
+/// 사라진다. 연속된 같은 화자의 세그먼트는 한 발언으로 합친다.
+///
+/// `names`는 화자 라벨을 실제 사람으로 바꾸는 표다. 명단에서 화자를 지정해두면
+/// "화자 1" 대신 "김서연(팀장)"이 들어가고, 그때부터 요약의 담당자가 번호가
+/// 아니라 사람이 된다. 지정하지 않은 화자는 라벨 그대로 나간다 — 모르는 것을
+/// 아는 척하지 않는다.
+///
+/// 두 화자를 같은 사람으로 지정하는 일도 있다. 화자분리가 한 사람을 둘로
+/// 쪼개는 경우인데, 그러면 이름이 같아지므로 여기서 자연스럽게 한 발언으로
+/// 합쳐진다.
+pub fn plain_text(segments: &[Segment], names: &BTreeMap<String, String>) -> String {
+    let mut out = String::new();
+    let mut current: Option<&str> = None;
 
-        for segment in &self.segments {
-            let text = segment.text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            match segment.speaker.as_deref() {
-                Some(speaker) => {
-                    if current != Some(speaker) {
-                        if !out.is_empty() {
-                            out.push('\n');
-                        }
-                        out.push_str(speaker);
-                        out.push_str(": ");
-                        current = Some(speaker);
-                    } else {
-                        out.push(' ');
-                    }
-                }
-                // 화자를 모르면 예전처럼 이어 붙인다.
-                None => {
-                    if !out.is_empty() {
-                        out.push(' ');
-                    }
-                    current = None;
-                }
-            }
-            out.push_str(text);
+    for segment in segments {
+        let text = segment.text.trim();
+        if text.is_empty() {
+            continue;
         }
-        out
+        match segment.speaker.as_deref() {
+            Some(label) => {
+                let who = names.get(label).map(String::as_str).unwrap_or(label);
+                if current != Some(who) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(who);
+                    out.push_str(": ");
+                    current = Some(who);
+                } else {
+                    out.push(' ');
+                }
+            }
+            // 화자를 모르면 예전처럼 이어 붙인다.
+            None => {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                current = None;
+            }
+        }
+        out.push_str(text);
     }
+    out
 }
 
 /// 오디오 파일을 전사한다.
@@ -174,4 +183,86 @@ pub fn transcribe_samples(
         segments,
         elapsed: started.elapsed().as_secs_f64(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(text: &str, speaker: Option<&str>) -> Segment {
+        Segment {
+            start: 0.0,
+            end: 1.0,
+            text: text.into(),
+            speaker: speaker.map(str::to_string),
+            speaker_turn: false,
+        }
+    }
+
+    /// 화자를 모르면 예전처럼 한 줄로 이어 붙인다.
+    #[test]
+    fn joins_unlabelled_segments() {
+        let segments = vec![segment("가나다", None), segment("라마바", None)];
+        assert_eq!(plain_text(&segments, &BTreeMap::new()), "가나다 라마바");
+    }
+
+    #[test]
+    fn groups_consecutive_segments_by_speaker() {
+        let segments = vec![
+            segment("가나다", Some("화자 1")),
+            segment("라마바", Some("화자 1")),
+            segment("사아자", Some("화자 2")),
+        ];
+        assert_eq!(
+            plain_text(&segments, &BTreeMap::new()),
+            "화자 1: 가나다 라마바\n화자 2: 사아자"
+        );
+    }
+
+    /// 명단에서 지정한 화자는 이름으로 나가야 한다. 요약의 담당자 배정이
+    /// 번호에서 사람으로 바뀌는 지점이 여기다.
+    #[test]
+    fn substitutes_assigned_names() {
+        let segments = vec![
+            segment("가나다", Some("화자 1")),
+            segment("라마바", Some("화자 2")),
+        ];
+        let names = BTreeMap::from([("화자 1".to_string(), "김서연(팀장)".to_string())]);
+        assert_eq!(
+            plain_text(&segments, &names),
+            "김서연(팀장): 가나다\n화자 2: 라마바",
+            "지정하지 않은 화자는 라벨 그대로 둔다"
+        );
+    }
+
+    /// 화자분리가 한 사람을 둘로 쪼개는 일이 있다. 둘 다 같은 사람으로
+    /// 지정하면 한 발언으로 합쳐져야 한다 — 같은 이름이 두 줄로 나뉘면
+    /// 모델이 주고받은 대화로 읽는다.
+    #[test]
+    fn merges_speakers_assigned_to_same_person() {
+        let segments = vec![
+            segment("가나다", Some("화자 1")),
+            segment("라마바", Some("화자 3")),
+        ];
+        let names = BTreeMap::from([
+            ("화자 1".to_string(), "김서연".to_string()),
+            ("화자 3".to_string(), "김서연".to_string()),
+        ]);
+        assert_eq!(plain_text(&segments, &names), "김서연: 가나다 라마바");
+    }
+
+    /// 빈 세그먼트가 발언을 끊지 않는다. 끊기면 한 사람의 말이 여러 줄로
+    /// 쪼개져 나간다.
+    #[test]
+    fn empty_segments_do_not_break_a_turn() {
+        let segments = vec![
+            segment("가나다", Some("화자 1")),
+            segment("   ", Some("화자 2")),
+            segment("사아자", Some("화자 1")),
+        ];
+        assert_eq!(
+            plain_text(&segments, &BTreeMap::new()),
+            "화자 1: 가나다 사아자"
+        );
+    }
 }

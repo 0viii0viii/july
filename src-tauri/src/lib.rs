@@ -5,19 +5,22 @@ pub mod catalog;
 pub mod setup;
 pub mod store;
 pub mod permission;
+pub mod roster;
 pub mod summarize;
 pub mod terms;
 pub mod transcribe;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use audio::{InputDevice, Recorder, RecordingStatus};
 use setup::{Environment, ModelSize};
 use store::{Meeting, MeetingBrief};
 use permission::MicPermission;
+use roster::Person;
 use summarize::{Backend, Context};
 use tauri::{AppHandle, Manager, State};
-use transcribe::Transcript;
+use transcribe::{Segment, Transcript};
 
 // ---------------------------------------------------------------- 준비 상태
 
@@ -193,6 +196,41 @@ async fn summarize_text(
     summarize::summarize(&backend, &transcript, &context.unwrap_or_default()).await
 }
 
+/// 요약 모델에 넘길 녹취록 평문을 만든다.
+///
+/// 프론트엔드가 직접 이어 붙이지 않고 여기를 거치는 이유는, 화자를 사람으로
+/// 바꾸는 규칙이 한 곳에만 있어야 하기 때문이다. 화면에 보이는 이름과 모델이
+/// 받는 이름이 어긋나면 요약의 담당자가 왜 그렇게 나왔는지 설명할 수 없게 된다.
+#[tauri::command]
+fn transcript_text(
+    app: AppHandle,
+    segments: Vec<Segment>,
+    speakers: Option<BTreeMap<String, String>>,
+) -> Result<String, String> {
+    let speakers = speakers.unwrap_or_default();
+    let names = roster::resolve(&roster::list(&app)?, &speakers);
+    Ok(transcribe::plain_text(&segments, &names))
+}
+
+// ---------------------------------------------------------------- 사내 명단
+
+#[tauri::command]
+fn list_people(app: AppHandle) -> Result<Vec<Person>, String> {
+    roster::list(&app)
+}
+
+/// 사람을 추가하거나 고친다. 저장된 결과를 돌려준다 — 새로 만든 경우
+/// 프론트엔드가 발급된 id를 알아야 화자 지정에 쓸 수 있다.
+#[tauri::command]
+fn save_person(app: AppHandle, person: Person) -> Result<Person, String> {
+    roster::save(&app, person)
+}
+
+#[tauri::command]
+fn delete_person(app: AppHandle, id: String) -> Result<(), String> {
+    roster::remove(&app, &id)
+}
+
 // -------------------------------------------------------------- 회의 보관함
 
 #[tauri::command]
@@ -241,6 +279,10 @@ pub fn run() {
             recording_status,
             transcribe_file,
             summarize_text,
+            transcript_text,
+            list_people,
+            save_person,
+            delete_person,
             list_meetings,
             get_meeting,
             save_meeting,

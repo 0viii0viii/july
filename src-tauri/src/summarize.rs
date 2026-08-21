@@ -17,14 +17,33 @@ const ANTHROPIC_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const ANTHROPIC_MAX_TOKENS: u32 = 8_000;
 
 /// 회의록 출력에 남겨둘 토큰. 컨텍스트는 프롬프트와 응답이 나눠 쓴다.
-const OLLAMA_OUTPUT_HEADROOM: usize = 2_048;
+///
+/// 안건별로 풀어 쓴 회의록은 5천 자를 넘기도 한다(실측 0.62토큰/자 기준 약
+/// 3,100토큰). 2048로 두면 액션 아이템을 쓰다가 잘린다.
+const OLLAMA_OUTPUT_HEADROOM: usize = 4_096;
 
-/// Ollama가 num_ctx 없이 돌 때의 런타임 기본값. 이 밑으로는 내려갈 이유가 없다.
-const OLLAMA_MIN_CTX: usize = 4_096;
+/// 가장 짧은 회의라도 이만큼은 연다.
+///
+/// 출력 여유만으로 이미 4K를 쓰므로 4096으로 두면 녹취록 자리가 남지 않는다.
+const OLLAMA_MIN_CTX: usize = 8_192;
+
+/// 출력 여유를 빼고도 녹취록이 들어갈 자리가 남아야 한다. 4K면 실측
+/// 0.62토큰/자로 6,600자 — 10분 남짓한 회의가 들어간다.
+const _: () = assert!(OLLAMA_MIN_CTX - OLLAMA_OUTPUT_HEADROOM >= 4_096);
 
 /// 카탈로그의 8B급 모델이 40960까지 지원하지만, 그만큼 KV 캐시를 잡는다.
-/// 32K면 세 시간짜리 회의도 들어간다.
+///
+/// 이 상한으로 못 담는 회의는 잘라내지 않고 구간을 나눠 처리한다 — 예전에는
+/// 그냥 넘겨서 Ollama가 앞에서부터 버렸다. 67분짜리 회의(83,185자 ≈ 51,574토큰)
+/// 하나로 이 상한을 넘겼고, 앞 25분이 통째로 사라졌다.
 const OLLAMA_MAX_CTX: usize = 32_768;
+
+/// 한 번에 모델에 넘길 녹취록 분량(글자).
+///
+/// 보수적인 추정치(0.85토큰/자)로도 지시문과 출력 여유를 더해 16,384 컨텍스트에
+/// 들어가는 크기다. 더 크게 잡을 수도 있지만, 8B 모델은 컨텍스트가 길어질수록
+/// 가운데 내용을 놓치는 편이라 굳이 키우지 않는다.
+const OLLAMA_CHUNK_CHARS: usize = 12_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -117,7 +136,14 @@ impl Context {
     }
 }
 
-fn build_prompt(transcript: &str, context: &Context) -> String {
+/// 마지막 단계에 넘기는 재료가 원본 녹취록인지, 구간별 메모인지.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Transcript,
+    Notes,
+}
+
+fn build_prompt(body: &str, context: &Context, source: Source) -> String {
     let briefing = context.as_briefing();
     let owner_rule = if context.attendees.trim().is_empty() {
         "- 담당자나 기한이 언급되지 않았다면 '미정'으로 적으세요.\n"
@@ -138,27 +164,87 @@ fn build_prompt(transcript: &str, context: &Context) -> String {
          확실하지 않으면 번호를 그대로 두세요. 억지로 배정하지 마세요.\n"
     };
 
+    // 메모는 이미 한 번 걸러진 글이라 "화자 1"이 남아 있지 않을 수 있다.
+    // 그래도 규칙을 빼지는 않는다 — 남아 있으면 처리해야 한다.
+    let intro = match source {
+        Source::Transcript => "다음은 회의 녹취록입니다. 이를 회의록으로 정리해 주세요.",
+        Source::Notes => "다음은 긴 회의를 구간별로 나눠 받아적은 메모입니다. \
+                          구간 경계는 회의의 안건 경계가 아니므로, 같은 안건이 여러 \
+                          구간에 흩어져 있으면 하나로 합쳐서 회의록으로 정리해 주세요.",
+    };
+    let source_word = match source {
+        Source::Transcript => "녹취록",
+        Source::Notes => "메모",
+    };
+
     format!(
         "{briefing}\
-         다음은 회의 녹취록입니다. 이를 회의록으로 정리해 주세요.\n\
+         {intro}\n\
+         \n\
+         회의에 참석하지 못한 사람이 이 회의록만 읽고도 무슨 이야기가 오갔는지 \
+         알 수 있어야 합니다. 짧게 줄이는 것이 목적이 아닙니다 — 녹취록에 있는 \
+         내용은 최대한 살리고, 없는 말만 쓰지 마세요.\n\
          \n\
          형식:\n\
          ## 한 줄 요약\n\
+         회의 전체를 한 문장으로.\n\
+         \n\
          ## 주요 논의\n\
+         안건마다 샵 세 개짜리 소제목을 달아 나누고, 그 아래에 오간 이야기를 \
+         문단으로 풀어 쓰세요. 안건 하나에 최소 서너 문장은 나와야 합니다.\n\
+         - 무엇을 결론냈는지만이 아니라 **왜 그렇게 판단했는지**, 어떤 근거와 \
+         제약이 언급됐는지까지 적으세요.\n\
+         - 의견이 갈린 지점은 양쪽 입장을 모두 남기세요.\n\
+         - 숫자, 날짜, 기간, 금액, 시스템·제품·서버 이름, 버전은 {source_word}에 \
+         나온 그대로 옮기세요. 뭉뚱그리지 마세요.\n\
+         - 논의가 길었던 안건은 길게, 짧게 지나간 안건은 짧게 씁니다.\n\
+         - 안건은 빠짐없이 뽑으세요. 잠깐 지나간 이야기도 하나의 안건입니다.\n\
+         - 안건마다 **최소 다섯 문장**을 쓰세요. 한 줄로 끝나면 회의록이 아니라 \
+         목차입니다.\n\
+         \n\
          ## 결정 사항\n\
+         - 결정된 내용 (그렇게 정한 이유)\n\
+         \n\
          ## 액션 아이템\n\
          - [담당자] 할 일 (기한)\n\
          \n\
          규칙:\n\
-         - 녹취록에 없는 내용을 지어내지 마세요.\n\
+         - {source_word}에 없는 내용을 지어내지 마세요.\n\
          {speaker_rule}\
          {owner_rule}\
+         - 결론이 나지 않은 채 끝난 논의도 '결론 없이 종료'라고 밝혀 남기세요. \
+         결정된 것만 골라 적으면 회의록이 실제보다 매끄러워 보입니다.\n\
          - 음성 인식 오류로 보이는 부분은 문맥에 맞게 자연스럽게 고쳐도 됩니다. \
          특히 위에 적힌 이름과 용어는 그 표기를 따르세요.\n\
          - 한국어로 작성하세요.\n\
          \n\
          ---\n\
-         {transcript}"
+         {body}"
+    )
+}
+
+/// 구간별 메모를 받아적게 하는 프롬프트.
+///
+/// 여기서는 요약하지 않는다. 요약은 마지막에 메모를 다시 넘겨 한 번만 한다 —
+/// 두 번 압축하면 두 번째 단계가 살릴 내용 자체가 남지 않는다.
+fn build_notes_prompt(chunk: &str, index: usize, total: usize, context: &Context) -> String {
+    let briefing = context.as_briefing();
+    format!(
+        "{briefing}\
+         다음은 회의 녹취록을 시간 순으로 {total}등분한 것 중 {index}번째 구간입니다. \
+         이 구간에서 오간 이야기를 메모로 받아적으세요.\n\
+         \n\
+         - **요약하지 마세요.** 어떤 주제로 무슨 말이 오갔는지 순서대로 적으면 됩니다.\n\
+         - 숫자, 날짜, 기간, 금액, 시스템·제품·서버 이름, 버전은 그대로 옮기세요.\n\
+         - 결정된 것, 누가 무엇을 하기로 한 것, 확인이 더 필요하다고 한 것은 \
+         빠뜨리지 마세요.\n\
+         - 이 구간은 회의 도중에서 잘려 있습니다. 앞뒤가 끊겨 보여도 그대로 두고, \
+         '회의를 마쳤다' 같은 마무리 문장은 쓰지 마세요.\n\
+         - 녹취록에 없는 내용을 지어내지 마세요.\n\
+         - 한국어로 작성하세요.\n\
+         \n\
+         ---\n\
+         {chunk}"
     )
 }
 
@@ -191,12 +277,23 @@ fn strip_think_tags(text: &str) -> String {
 /// 항상 최대로 잡지 않는 건 KV 캐시 때문이다. 8B 모델을 32K로 열면 몇 GB를 더
 /// 잡는데, 10분짜리 회의에는 필요 없다. 2의 거듭제곱으로 올려서 같은 길이의
 /// 회의가 같은 컨텍스트를 쓰게 한다 — 그래야 Ollama가 모델을 다시 안 올린다.
+/// 프롬프트와 출력에 필요한 토큰 수를 어림한다.
+///
+/// qwen3 토크나이저 실측으로 한국어는 글자당 0.62토큰이었다(24,625자 →
+/// 15,366토큰). 영어·숫자는 이보다 낮으니 한국어가 최악이고, 0.85로 잡으면
+/// 4할 가까운 여유가 남는다. 정확한 토큰 수는 세어볼 방법이 없으므로 모자라서
+/// 잘리는 것보다 남아서 메모리를 조금 더 쓰는 쪽을 택한다.
+fn estimate_tokens(prompt: &str) -> usize {
+    prompt.chars().count() * 85 / 100 + OLLAMA_OUTPUT_HEADROOM
+}
+
+/// 이 프롬프트가 한 번에 들어가는지.
+fn fits_in_one_context(prompt: &str) -> bool {
+    estimate_tokens(prompt) <= OLLAMA_MAX_CTX
+}
+
 fn choose_num_ctx(prompt: &str) -> usize {
-    // qwen3 토크나이저 실측으로 한국어는 글자당 0.62토큰이었다(24,625자 →
-    // 15,366토큰). 영어·숫자는 이보다 낮으니 한국어가 최악이고, 0.85로 잡으면
-    // 4할 가까운 여유가 남는다. 정확한 토큰 수는 세어볼 방법이 없으므로
-    // 모자라서 잘리는 것보다 남아서 메모리를 조금 더 쓰는 쪽을 택한다.
-    let estimated = prompt.chars().count() * 85 / 100 + OLLAMA_OUTPUT_HEADROOM;
+    let estimated = estimate_tokens(prompt);
 
     let mut ctx = OLLAMA_MIN_CTX;
     while ctx < estimated && ctx < OLLAMA_MAX_CTX {
@@ -205,21 +302,74 @@ fn choose_num_ctx(prompt: &str) -> usize {
     ctx.min(OLLAMA_MAX_CTX)
 }
 
+/// 녹취록을 줄 경계에서 자른다.
+///
+/// 화자분리를 거치면 한 줄이 한 사람의 발언이다. 줄 가운데를 자르면 발언이
+/// 토막나므로 줄 단위로 모은다. 한 줄이 상한보다 길면 그 줄만 따로 낸다 —
+/// 억지로 쪼개서 문장을 깨는 것보다 조금 큰 구간을 넘기는 편이 낫다.
+/// 상한을 넘는 한 줄을 공백 경계에서 쪼갠다.
+///
+/// 화자분리에 실패한 녹취록은 전체가 한 줄로 온다(`plain_text`가 화자를 모르면
+/// 공백으로 이어 붙인다). 줄 단위로만 나누면 그런 회의는 아예 나눠지지 않아
+/// 예전처럼 앞부분이 잘려나간다.
+fn split_long_line(line: &str, max_chars: usize) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() <= max_chars {
+        return vec![line.to_string()];
+    }
+
+    let mut out = Vec::new();
+    let mut start = 0;
+    while chars.len() - start > max_chars {
+        let hard = start + max_chars;
+        // 공백에서 끊어야 낱말이 갈라지지 않는다. 절반까지만 되짚고, 그 안에
+        // 공백이 없으면(띄어쓰기 없는 글) 그냥 자른다.
+        let cut = (start + max_chars / 2..hard)
+            .rev()
+            .find(|&i| chars[i].is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(hard);
+        out.push(chars[start..cut].iter().collect());
+        start = cut;
+    }
+    out.push(chars[start..].iter().collect());
+    out
+}
+
+fn split_transcript(transcript: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for line in transcript.lines().flat_map(|l| split_long_line(l, max_chars)) {
+        let line = line.as_str();
+        let would_be = current.chars().count() + line.chars().count() + 1;
+        if !current.is_empty() && would_be > max_chars {
+            chunks.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(line);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 #[derive(Deserialize)]
 struct OllamaResponse {
     response: String,
 }
 
-async fn summarize_ollama(
+/// 프롬프트 하나를 Ollama에 넘기고 답을 받는다.
+async fn ollama_generate(
     client: &reqwest::Client,
     model: &str,
-    endpoint: Option<&str>,
-    transcript: &str,
-    context: &Context,
+    base: &str,
+    prompt: &str,
 ) -> Result<String, String> {
-    let base = endpoint.unwrap_or(OLLAMA_DEFAULT_ENDPOINT).trim_end_matches('/');
     let url = format!("{base}/api/generate");
-    let prompt = build_prompt(transcript, context);
 
     let res = client
         .post(&url)
@@ -230,7 +380,10 @@ async fn summarize_ollama(
             // 추론 모델의 사고 과정은 회의록에 불필요하다.
             "think": false,
             "options": {
-                "num_ctx": choose_num_ctx(&prompt),
+                "num_ctx": choose_num_ctx(prompt),
+                // Ollama 기본값은 버전에 따라 128로 잘리기도 한다. 컨텍스트에
+                // 잡아둔 여유만큼은 쓰게 명시한다.
+                "num_predict": OLLAMA_OUTPUT_HEADROOM,
                 // 카탈로그 모델들의 기본값은 0.6 언저리다. 회의록은 녹취록에
                 // 있는 내용만 옮기는 작업이라 낮을수록 지어내는 게 준다.
                 "temperature": 0.3,
@@ -254,6 +407,44 @@ async fn summarize_ollama(
         .map_err(|e| format!("Ollama 응답을 해석할 수 없습니다: {e}"))?;
 
     Ok(strip_think_tags(&parsed.response))
+}
+
+async fn summarize_ollama(
+    client: &reqwest::Client,
+    model: &str,
+    endpoint: Option<&str>,
+    transcript: &str,
+    context: &Context,
+) -> Result<String, String> {
+    let base = endpoint.unwrap_or(OLLAMA_DEFAULT_ENDPOINT).trim_end_matches('/');
+
+    // 한 번에 들어가면 그대로 간다.
+    //
+    // 들어가더라도 나누는 편이 나을까 싶어 재봤지만 아니었다. 31,584자 회의를
+    // 3구간으로 나누니 1,719자(1,175초), 한 번에 넘기니 1,809자(322초)였다 —
+    // 네 배 가까이 느리고 결과는 조금 짧았다. 나누는 건 상한을 넘을 때뿐이다.
+    let single = build_prompt(transcript, context, Source::Transcript);
+    if fits_in_one_context(&single) {
+        return ollama_generate(client, model, base, &single).await;
+    }
+
+    // 안 들어가면 구간별로 받아적은 뒤 그 메모로 회의록을 쓴다.
+    let chunks = split_transcript(transcript, OLLAMA_CHUNK_CHARS);
+    let total = chunks.len();
+    let mut notes = String::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let prompt = build_notes_prompt(chunk, i + 1, total, context);
+        let note = ollama_generate(client, model, base, &prompt).await?;
+        notes.push_str(&format!("[{}/{} 구간]\n{}\n\n", i + 1, total, note.trim()));
+    }
+
+    ollama_generate(
+        client,
+        model,
+        base,
+        &build_prompt(notes.trim(), context, Source::Notes),
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -299,7 +490,7 @@ async fn summarize_anthropic(
             "max_tokens": ANTHROPIC_MAX_TOKENS,
             // 정책상 거절될 경우 권장 모델로 자동 재시도한다.
             "fallbacks": "default",
-            "messages": [{ "role": "user", "content": build_prompt(transcript, context) }],
+            "messages": [{ "role": "user", "content": build_prompt(transcript, context, Source::Transcript) }],
         }))
         .send()
         .await
@@ -362,8 +553,9 @@ pub async fn summarize(
     }
 
     let client = reqwest::Client::builder()
-        // 로컬 모델은 긴 녹취록에서 수 분이 걸릴 수 있다.
-        .timeout(std::time::Duration::from_secs(600))
+        // 로컬 모델은 긴 녹취록에서 수 분이 걸린다. 구간을 나눠 돌리면 호출이
+        // 여러 번이라 더 길어진다 — 여기서 끊기면 회의록을 통째로 잃는다.
+        .timeout(std::time::Duration::from_secs(1_800))
         .build()
         .map_err(|e| format!("HTTP 클라이언트를 만들 수 없습니다: {e}"))?;
 
@@ -415,6 +607,76 @@ mod tests {
         // 10분 남짓한 회의. 이런 건 32K를 잡을 이유가 없다.
         let ctx = choose_num_ctx(&"가".repeat(8_000));
         assert!(ctx < OLLAMA_MAX_CTX, "짧은 회의에 KV 캐시를 낭비한다: {ctx}");
+    }
+
+    #[test]
+    fn splits_on_line_boundaries() {
+        let text = "화자 1: 가나다\n화자 2: 라마바\n화자 1: 사아자";
+        let chunks = split_transcript(text, 12);
+        assert!(chunks.len() > 1, "잘리지 않았다");
+        for chunk in &chunks {
+            assert!(chunk.lines().all(|l| l.starts_with("화자")), "줄 가운데를 잘랐다: {chunk:?}");
+        }
+    }
+
+    /// 나눠도 내용이 사라지면 안 된다. 잘라 버리는 예전 동작으로 돌아가는 걸
+    /// 막는 회귀 테스트다.
+    #[test]
+    fn split_keeps_every_line() {
+        let text: String = (0..200).map(|i| format!("화자 1: 발언 {i}\n")).collect();
+        let chunks = split_transcript(&text, 100);
+        let rejoined = chunks.join("\n");
+        for i in 0..200 {
+            assert!(rejoined.contains(&format!("발언 {i}")), "{i}번째 발언이 사라졌다");
+        }
+    }
+
+    /// 화자분리에 실패하면 녹취록 전체가 한 줄로 온다. 그래도 나눠져야 한다 —
+    /// 안 나눠지면 컨텍스트를 넘겨 앞부분이 잘린다.
+    #[test]
+    fn splits_a_single_line_transcript() {
+        let long: String = (0..2_000).map(|i| format!("낱말{i} ")).collect();
+        let chunks = split_transcript(&long, 500);
+        assert!(chunks.len() > 1, "한 줄짜리 녹취록이 나눠지지 않았다");
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 500, "구간이 상한을 넘는다");
+        }
+        let rejoined: String = chunks.join("");
+        for i in 0..2_000 {
+            assert!(rejoined.contains(&format!("낱말{i} ")), "낱말{i}이 깨졌다");
+        }
+    }
+
+    /// 띄어쓰기가 없어 끊을 자리를 못 찾아도 버리지는 않는다.
+    #[test]
+    fn splits_text_without_any_whitespace() {
+        let solid = "가".repeat(1_000);
+        let chunks = split_transcript(&solid, 100);
+        assert_eq!(chunks.concat(), solid, "글자가 사라졌다");
+    }
+
+    #[test]
+    fn short_transcript_is_not_split() {
+        let chunks = split_transcript("화자 1: 짧다", OLLAMA_CHUNK_CHARS);
+        assert_eq!(chunks.len(), 1);
+    }
+
+    /// 구간 하나가 컨텍스트 상한에 들어가야 나누는 의미가 있다.
+    #[test]
+    fn a_chunk_fits_in_one_context() {
+        let chunk = "가".repeat(OLLAMA_CHUNK_CHARS);
+        let prompt = build_notes_prompt(&chunk, 1, 5, &Context::default());
+        assert!(fits_in_one_context(&prompt), "구간을 나눠도 여전히 상한에 걸린다");
+    }
+
+    /// 실측한 67분 회의는 31,584자로 한 번에 들어갔다. 나누는 길은 그보다 긴
+    /// 회의를 위한 것이다 — 이 크기면 상한을 넘는다.
+    #[test]
+    fn a_long_meeting_needs_splitting() {
+        let transcript = "가".repeat(83_185);
+        let prompt = build_prompt(&transcript, &Context::default(), Source::Transcript);
+        assert!(!fits_in_one_context(&prompt), "상한에 걸리지 않는다");
+        assert!(split_transcript(&transcript, OLLAMA_CHUNK_CHARS).len() > 1);
     }
 
     #[test]

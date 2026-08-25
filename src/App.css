@@ -1632,3 +1632,98 @@ input:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------ 원문 교정 · 참석자 선택 */
+
+.raw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.raw-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* 안내문이 왼쪽, 버튼들이 오른쪽. */
+.raw-actions .cast-hint {
+  margin-right: auto;
+}
+
+.reel--edit li {
+  align-items: flex-start;
+}
+
+/* 원문 교정에서 줄마다 붙는 화자 선택. 전역 select는 가로를 다 차지하므로
+   발언자 칸 폭에 맞춰 줄인다. */
+.reel-speaker {
+  flex: none;
+  width: 108px;
+  font-size: 12px;
+  padding: 3px 24px 3px 8px;
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+.reel-edit {
+  flex: 1;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 0 4px;
+  resize: none;
+}
+
+.reel-edit:focus {
+  outline: 1px solid var(--ink-4);
+  background: var(--card);
+}
+
+.pick-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.pick-person {
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  color: var(--ink-2);
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.pick-person:hover {
+  border-color: var(--ink-4);
+}
+
+.pick-person.on {
+  border-color: var(--seal);
+  background: var(--seal-soft);
+  color: var(--seal);
+  font-weight: 600;
+}
+
+/* 조직도 열기 — 고르는 것이 아니라 등록하러 가는 길이므로 점선으로 구분한다. */
+.pick-person.more {
+  border-style: dashed;
+  color: var(--ink-4);
+}
+
+.link-btn {
+  font-size: inherit;
+  color: inherit;
+  text-decoration: underline;
+  padding: 0;
+}

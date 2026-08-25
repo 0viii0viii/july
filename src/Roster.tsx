@@ -252,9 +252,9 @@ export function Roster({
       className="sheet-backdrop"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="sheet sheet--wide" role="dialog" aria-label="명단">
+      <div className="sheet sheet--wide" role="dialog" aria-label="조직도">
         <div className="sheet-head">
-          <h2>명단</h2>
+          <h2>조직도</h2>
           <button className="icon-btn" onClick={onClose} aria-label="닫기">
             닫기
           </button>

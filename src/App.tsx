@@ -144,6 +144,15 @@ export default function App() {
   const [meetings, setMeetings] = useState<MeetingBrief[]>([]);
   const [current, setCurrent] = useState<Meeting | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  /**
+   * 원문 교정 중인 초안. 세그먼트와 같은 순서로 텍스트·화자를 든다.
+   *
+   * 전사가 단어를 틀리거나 화자분리가 발언을 엉뚱한 사람에게 붙였을 때
+   * 여기서 고치고 다시 요약한다 — 원문이 틀린 채로는 요약이 계속 꼬인다.
+   */
+  const [rawDraft, setRawDraft] = useState<
+    { text: string; speaker: string | null }[] | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   // 명단은 회의와 독립적으로 산다 — 한 번 등록해두고 계속 쓴다.
@@ -243,6 +252,7 @@ export default function App() {
     async (audioPath: string, context: Context) => {
       setError(null);
       setShowRaw(false);
+      setRawDraft(null);
       setPending(null);
 
       // 다음 회의에 미리 채워줄 값으로 기억해 둔다.
@@ -411,6 +421,7 @@ export default function App() {
 
   const openMeeting = useCallback(async (id: string) => {
     setShowRaw(false);
+    setRawDraft(null);
     setError(null);
     try {
       setCurrent(await getMeeting(id));
@@ -438,6 +449,7 @@ export default function App() {
     try {
       await deleteMeeting(current.id);
       setCurrent(null);
+      setRawDraft(null);
       await refreshList();
     } catch (e) {
       setError(String(e));
@@ -509,26 +521,61 @@ export default function App() {
    * 화자를 지정해도 이미 만들어진 회의록은 그대로다 — 요약은 지정 전에 돌았기
    * 때문이다. 다시 돌려야 "화자 2"가 "박민수(주임)"로 바뀐다.
    */
-  const onResummarize = useCallback(async () => {
-    if (!current) return;
-    setError(null);
-    setPhase("summarizing");
-    try {
-      const summary = await summarizeText(
-        backend,
-        await transcriptText(current.segments, current.speakers ?? {}),
-        current.context,
-      );
-      const next = { ...current, summary };
+  const onResummarize = useCallback(
+    // 방금 저장한 회의로 바로 이어 돌릴 수 있게 인자로도 받는다 — setCurrent는
+    // 비동기라 원문을 고친 직후에는 current가 아직 옛 세그먼트를 들고 있다.
+    async (meeting?: Meeting) => {
+      const target = meeting ?? current;
+      if (!target) return;
+      setError(null);
+      setPhase("summarizing");
+      try {
+        const summary = await summarizeText(
+          backend,
+          await transcriptText(target.segments, target.speakers ?? {}),
+          target.context,
+        );
+        const next = { ...target, summary };
+        setCurrent(next);
+        await saveMeeting(next);
+        await refreshList();
+      } catch (e) {
+        setError(`다시 요약하지 못했습니다: ${e}`);
+      } finally {
+        setPhase("idle");
+      }
+    },
+    [backend, current, refreshList],
+  );
+
+  /**
+   * 교정한 원문을 저장한다. 요약까지 이어서 돌릴지는 호출자가 정한다.
+   *
+   * 저장과 요약을 나눈 이유: 요약은 로컬 모델에서 몇 분씩 걸린다. 오타 하나
+   * 고치자고 매번 기다리게 할 수는 없다.
+   */
+  const onSaveRaw = useCallback(
+    async (thenSummarize: boolean) => {
+      if (!current || !rawDraft) return;
+      const segments = current.segments.map((s, i) => ({
+        ...s,
+        text: rawDraft[i]?.text ?? s.text,
+        speaker: rawDraft[i] ? rawDraft[i].speaker : s.speaker,
+      }));
+      const next = { ...current, segments };
       setCurrent(next);
-      await saveMeeting(next);
-      await refreshList();
-    } catch (e) {
-      setError(`다시 요약하지 못했습니다: ${e}`);
-    } finally {
-      setPhase("idle");
-    }
-  }, [backend, current, refreshList]);
+      setRawDraft(null);
+      try {
+        await saveMeeting(next);
+        await refreshList();
+      } catch (e) {
+        setError(`고친 원문을 저장하지 못했습니다: ${e}`);
+        return;
+      }
+      if (thenSummarize) await onResummarize(next);
+    },
+    [current, rawDraft, refreshList, onResummarize],
+  );
 
   const onDownloadModel = useCallback(
     async (model: ModelSize) => {
@@ -718,7 +765,7 @@ export default function App() {
             <em className="ver">v{__APP_VERSION__}</em>
           </span>
           <button className="icon-btn" onClick={() => setShowRoster(true)}>
-            명단
+            조직도
           </button>
           <button className="icon-btn" onClick={() => setShowConfig(true)}>
             설정
@@ -775,6 +822,8 @@ export default function App() {
             source={pending.path}
             seconds={pending.seconds}
             initial={lastContext}
+            people={people}
+            onManagePeople={() => setShowRoster(true)}
             onStart={(context) => void process(pending.path, context)}
             onCancel={() => {
               setPending(null);
@@ -888,13 +937,13 @@ export default function App() {
                     className="icon-btn"
                     onClick={() => setShowRoster(true)}
                   >
-                    명단 관리
+                    조직도 관리
                   </button>
                 </div>
 
                 {people.length === 0 ? (
                   <p className="cast-hint">
-                    명단에 사람을 등록하면 여기서 화자에 이름을 붙일 수 있습니다.
+                    조직도에 사람을 등록하면 여기서 화자에 이름을 붙일 수 있습니다.
                     한 번 등록해두면 다음 회의부터는 고르기만 하면 됩니다.
                   </p>
                 ) : (
@@ -946,25 +995,132 @@ export default function App() {
             )}
 
             <section className="raw">
-              <button
-                className={`raw-toggle${showRaw ? " open" : ""}`}
-                onClick={() => setShowRaw((v) => !v)}
-              >
-                <svg
-                  width="9"
-                  height="9"
-                  viewBox="0 0 10 10"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+              <div className="raw-head">
+                <button
+                  className={`raw-toggle${showRaw ? " open" : ""}`}
+                  onClick={() => setShowRaw((v) => !v)}
                 >
-                  <path d="M3 1l5 4-5 4" />
-                </svg>
-                전사 원문 {current.segments.length}문장
-              </button>
-              {showRaw && (
+                  <svg
+                    width="9"
+                    height="9"
+                    viewBox="0 0 10 10"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 1l5 4-5 4" />
+                  </svg>
+                  전사 원문 {current.segments.length}문장
+                </button>
+                {/*
+                  전사가 단어를 틀리거나 화자분리가 발언을 엉뚱한 사람에게
+                  붙였을 때 여기서 고친다. 원문이 틀린 채로는 몇 번을 다시
+                  요약해도 같은 오류가 회의록에 박힌다.
+                */}
+                {showRaw && !rawDraft && (
+                  <button
+                    className="icon-btn"
+                    onClick={() =>
+                      setRawDraft(
+                        current.segments.map((s) => ({
+                          text: s.text,
+                          speaker: s.speaker,
+                        })),
+                      )
+                    }
+                    disabled={working}
+                  >
+                    원문 고치기
+                  </button>
+                )}
+              </div>
+
+              {showRaw && rawDraft && (
+                <>
+                  <div className="raw-actions">
+                    <span className="cast-hint">
+                      잘못 받아적힌 단어와 잘못 붙은 화자를 바로잡을 수
+                      있습니다. 고친 내용은 다시 요약해야 회의록에 반영됩니다.
+                    </span>
+                    <button
+                      className="icon-btn"
+                      onClick={() => setRawDraft(null)}
+                    >
+                      취소
+                    </button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => void onSaveRaw(false)}
+                    >
+                      저장
+                    </button>
+                    <button
+                      className="btn btn--quiet"
+                      onClick={() => void onSaveRaw(true)}
+                      disabled={!canSummarize}
+                    >
+                      저장하고 다시 요약
+                    </button>
+                  </div>
+                  <ol className="reel reel--edit">
+                    {current.segments.map((s, i) => (
+                      <li key={i}>
+                        <time>{formatClock(s.start)}</time>
+                        {cast.length > 0 && (
+                          <select
+                            className="reel-speaker"
+                            value={rawDraft[i]?.speaker ?? ""}
+                            onChange={(e) =>
+                              setRawDraft((d) =>
+                                d
+                                  ? d.map((row, j) =>
+                                      j === i
+                                        ? {
+                                            ...row,
+                                            speaker: e.target.value || null,
+                                          }
+                                        : row,
+                                    )
+                                  : d,
+                              )
+                            }
+                          >
+                            <option value="">화자 없음</option>
+                            {cast.map((label) => (
+                              <option key={label} value={label}>
+                                {speakerName(label)}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <textarea
+                          className="reel-edit"
+                          value={rawDraft[i]?.text ?? ""}
+                          rows={Math.max(
+                            1,
+                            Math.ceil((rawDraft[i]?.text.length ?? 0) / 58),
+                          )}
+                          onChange={(e) =>
+                            setRawDraft((d) =>
+                              d
+                                ? d.map((row, j) =>
+                                    j === i
+                                      ? { ...row, text: e.target.value }
+                                      : row,
+                                  )
+                                : d,
+                            )
+                          }
+                        />
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              )}
+
+              {showRaw && !rawDraft && (
                 <ol className="reel">
                   {current.segments.map((s, i) => (
                     <li key={i}>

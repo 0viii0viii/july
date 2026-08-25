@@ -246,6 +246,15 @@ export const renameMeeting = (id: string, title: string) =>
 export const deleteMeeting = (id: string) =>
   invoke<void>("delete_meeting", { id });
 
+/**
+ * 원본 음성 파일을 Finder(탐색기)에서 보여준다.
+ *
+ * 앱이 직접 녹음한 파일은 앱 데이터 폴더에 있어서 이 길이 없으면 사용자가
+ * 원본을 들어볼 방법이 없다.
+ */
+export const revealAudio = (path: string) =>
+  invoke<void>("reveal_audio", { path });
+
 /** 바이트를 사람이 읽는 단위로. 모델 용량 안내에 쓴다. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

@@ -258,6 +258,21 @@ fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
     store::remove(&app, &id)
 }
 
+/// 회의의 원본 음성 파일을 Finder(윈도우에선 탐색기)에서 보여준다.
+///
+/// 앱이 직접 녹음한 파일은 앱 데이터 폴더 깊숙이 저장되어 사용자가 찾아갈
+/// 방법이 없다. 전사가 이상하게 나왔을 때 원본을 들어봐야 녹음 문제인지
+/// 전사 문제인지 가릴 수 있으므로, 여는 길을 하나 내준다.
+#[tauri::command]
+fn reveal_audio(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err("음성 파일을 찾을 수 없습니다. 옮겨졌거나 지워진 것 같습니다.".into());
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|e| format!("파일을 표시할 수 없습니다: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -288,6 +303,7 @@ pub fn run() {
             save_meeting,
             rename_meeting,
             delete_meeting,
+            reveal_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

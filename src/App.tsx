@@ -26,6 +26,7 @@ import {
   pullSummarizer,
   recordingStatus,
   renameMeeting,
+  revealAudio,
   saveMeeting,
   savePerson,
   startRecording,
@@ -841,9 +842,30 @@ export default function App() {
               <div className="doc-facts">
                 <span>{formatClock(current.duration)}</span>
                 <span>{current.segments.length}문장</span>
+                {/*
+                  직접 녹음한 파일은 앱 데이터 폴더에 있어서 이 버튼이 없으면
+                  사용자가 원본을 들어볼 방법이 없다. 전사가 이상할 때 원본
+                  확인이 첫 번째 진단 수단이라 회의 화면에 상시로 둔다.
+                */}
+                {current.audio_path && (
+                  <button
+                    className="icon-btn"
+                    style={{ marginLeft: "auto", padding: "2px 8px" }}
+                    onClick={() => {
+                      revealAudio(current.audio_path!).catch((e) =>
+                        setError(String(e)),
+                      );
+                    }}
+                  >
+                    원본 음성 보기
+                  </button>
+                )}
                 <button
                   className="icon-btn"
-                  style={{ marginLeft: "auto", padding: "2px 8px" }}
+                  style={{
+                    marginLeft: current.audio_path ? undefined : "auto",
+                    padding: "2px 8px",
+                  }}
                   onClick={onDelete}
                 >
                   삭제

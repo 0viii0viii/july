@@ -64,10 +64,33 @@ const ALIASES: &[(&str, &str)] = &[
     ("Qube", "Kube"),
 ];
 
+/// 사용자 입력에서 "틀린표기→정답" 매핑을 뽑는다.
+///
+/// 항목 구분자는 쉼표(또는 줄바꿈)이고, 화살표는 →와 ->를 받는다. 한국어든
+/// 영어든 받는다 — 오교정이 불가능한 명시적 치환이라 언어를 가릴 이유가 없다.
+/// whisper의 오인식은 무작위가 아니라 같은 회의에서 체계적으로 반복되므로
+/// ("박태리" 같은 이름 오인식이 회의 내내 이어진다) 매핑 한 줄이 오류
+/// 수십 개를 지운다.
+fn user_aliases(terms: &str) -> Vec<(String, String)> {
+    terms
+        .split([',', '\n'])
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let (wrong, right) = entry
+                .split_once('→')
+                .or_else(|| entry.split_once("->"))?;
+            let (wrong, right) = (wrong.trim(), right.trim());
+            (!wrong.is_empty() && !right.is_empty() && wrong != right)
+                .then(|| (wrong.to_string(), right.to_string()))
+        })
+        .collect()
+}
+
 /// 사용자가 쉼표나 공백으로 적어준 용어에서 라틴 문자 항목만 뽑는다.
 ///
-/// 한국어 항목은 여기서 버린다 — 한국어 교정은 아직 구현하지 않았고, 라틴
-/// 매칭에 한국어를 섞으면 편집거리가 의미를 잃는다.
+/// 매핑(화살표 포함) 항목은 화살표 문자가 필터에 걸려 여기 섞이지 않는다.
+/// 한국어 항목은 여기서 버린다 — 한국어는 표기 정규화 대상이 아니고(대소문자가
+/// 없다), 명시적 매핑으로만 다룬다.
 fn user_latin_terms(terms: &str) -> Vec<String> {
     terms
         .split(|c: char| c == ',' || c.is_whitespace())
@@ -83,9 +106,23 @@ fn user_latin_terms(terms: &str) -> Vec<String> {
 
 /// 이 토큰을 어떤 정답 표기로 바꿔야 하는지 찾는다. 바꿀 필요가 없으면 `None`.
 ///
-/// 두 단계 모두 **알려진 문자열과 정확히 일치할 때만** 동작한다. 모르는 토큰은
+/// 세 단계 모두 **알려진 문자열과 정확히 일치할 때만** 동작한다. 모르는 토큰은
 /// 절대 건드리지 않는다 — 이게 오교정이 불가능한 이유다.
-fn canonical_for(token: &str, catalog: &[String], lookup: &HashMap<String, usize>) -> Option<String> {
+fn canonical_for(
+    token: &str,
+    user_aliases: &[(String, String)],
+    catalog: &[String],
+    lookup: &HashMap<String, usize>,
+) -> Option<String> {
+    // 0단계 — 사용자가 준 매핑. 사내 표기가 내장 지식과 다를 수 있으므로
+    // 항상 사용자 쪽이 먼저다.
+    if let Some((_, right)) = user_aliases
+        .iter()
+        .find(|(wrong, _)| wrong.eq_ignore_ascii_case(token))
+    {
+        return (right != token).then(|| right.clone());
+    }
+
     let lower = token.to_ascii_lowercase();
 
     // 1단계 — 표기 분열 정리.
@@ -105,6 +142,29 @@ fn canonical_for(token: &str, catalog: &[String], lookup: &HashMap<String, usize
 /// `user_terms`는 회의 정보 화면에서 받은 용어다. 내장 카탈로그와 합쳐지고,
 /// 같은 이름이 있으면 사용자 쪽이 이긴다 — 사내 표기가 업계 표기와 다를 수 있다.
 pub fn correct(text: &str, user_terms: &str) -> String {
+    // 사용자 매핑을 둘로 가른다. ASCII 한 단어짜리(vmure→VMware)는 토큰 경계를
+    // 지키는 아래 스캔에 태우고 — 그래야 "cat→Kafka"가 category를 안 건드린다 —
+    // 한국어나 여러 단어짜리는 통짜 치환으로 처리한다. 한국어는 조사가 붙어도
+    // 부분 문자열 치환이 자연스럽게 맞는다("박태리가" → "박대리가").
+    let (token_aliases, free_aliases): (Vec<_>, Vec<_>) = user_aliases(user_terms)
+        .into_iter()
+        .partition(|(wrong, _)| wrong.chars().all(|c| c.is_ascii_alphanumeric()));
+
+    let text = if free_aliases.is_empty() {
+        text.to_string()
+    } else {
+        // 긴 매핑부터 — 짧은 쪽이 긴 쪽의 일부를 먼저 바꿔치기하면 긴 매핑은
+        // 영영 못 맞는다 ("태리→대리"가 "박태리→박대리"를 무력화한다).
+        let mut ordered = free_aliases;
+        ordered.sort_by_key(|(wrong, _)| std::cmp::Reverse(wrong.chars().count()));
+        ordered
+            .iter()
+            .fold(text.to_string(), |acc, (wrong, right)| {
+                acc.replace(wrong.as_str(), right)
+            })
+    };
+    let text = text.as_str();
+
     let mut catalog: Vec<String> = user_latin_terms(user_terms);
     let mut lookup: HashMap<String, usize> = HashMap::new();
     for (i, t) in catalog.iter().enumerate() {
@@ -139,7 +199,7 @@ pub fn correct(text: &str, user_terms: &str) -> String {
             i += 1;
         }
         let token = &text[start..i];
-        match canonical_for(token, &catalog, &lookup) {
+        match canonical_for(token, &token_aliases, &catalog, &lookup) {
             Some(fixed) => out.push_str(&fixed),
             None => out.push_str(token),
         }
@@ -223,5 +283,57 @@ mod tests {
     fn preserves_text_without_latin() {
         let s = "다들 모이셨죠. 시작하겠습니다.";
         assert_eq!(correct(s, ""), s);
+    }
+
+    /// 한국어 이름 오인식이 이 기능의 존재 이유다. 조사가 붙어도 맞아야 한다.
+    #[test]
+    fn korean_mapping_fixes_names() {
+        assert_eq!(
+            correct("박태리가 자료를 공유했습니다", "박태리→박대리"),
+            "박대리가 자료를 공유했습니다"
+        );
+    }
+
+    /// ASCII 매핑은 토큰 경계를 지킨다 — 통짜 치환이면 category가 망가진다.
+    #[test]
+    fn ascii_mapping_respects_token_boundaries() {
+        assert_eq!(correct("category 정리", "cat->Kafka"), "category 정리");
+        assert_eq!(correct("cat 얘기, Cat 얘기", "cat->Kafka"), "Kafka 얘기, Kafka 얘기");
+    }
+
+    /// 짧은 매핑이 긴 매핑의 일부를 먼저 바꿔치기하면 안 된다.
+    #[test]
+    fn longer_mapping_applies_first() {
+        assert_eq!(
+            correct("박태리 왔습니다", "태리→대리, 박태리→박대리"),
+            "박대리 왔습니다"
+        );
+    }
+
+    /// →와 -> 둘 다 받는다. 키보드로 →를 못 치는 사람이 대부분이다.
+    #[test]
+    fn accepts_both_arrow_forms() {
+        assert_eq!(correct("스마트 스토어 입점", "스마트 스토어->스마트스토어"), "스마트스토어 입점");
+    }
+
+    /// 매핑과 일반 용어를 한 입력란에 섞어 써도 각자 제 역할을 한다.
+    #[test]
+    fn mappings_mix_with_plain_terms() {
+        assert_eq!(
+            correct("vmware 건은 박태리 담당", "VMWare, 박태리→박대리"),
+            "VMWare 건은 박대리 담당"
+        );
+    }
+
+    /// 사용자 매핑이 내장 지식보다 먼저다 — 사내 표기가 다를 수 있다.
+    #[test]
+    fn user_mapping_wins_over_builtin_alias() {
+        assert_eq!(correct("vmure 서버", "vmure→브이엠웨어"), "브이엠웨어 서버");
+    }
+
+    /// 정답이 빈 매핑, 양쪽이 같은 매핑은 버린다 — 지웠다가 무한 반복될 입력이다.
+    #[test]
+    fn rejects_degenerate_mappings() {
+        assert_eq!(correct("그대로", "그대로→, →정답, 같음→같음"), "그대로");
     }
 }

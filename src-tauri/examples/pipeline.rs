@@ -122,7 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n요약 중... ({})\n", backend.label());
     let started = std::time::Instant::now();
-    let summary = summarize::summarize(&backend, &result.plain_text(), &context).await?;
+    // 개발용 파이프라인엔 명단이 없다 — 화자 라벨을 그대로 내보낸다.
+    let plain = transcribe::plain_text(&result.segments, &std::collections::BTreeMap::new());
+    let summary = summarize::summarize(&backend, &plain, &context).await?;
     println!("{summary}");
     println!("\n요약 완료: {:.1}초 소요", started.elapsed().as_secs_f64());
 

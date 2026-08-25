@@ -139,6 +139,21 @@ pub fn transcribe_samples(
         params.set_initial_prompt(hint);
     }
 
+    // 창 사이의 텍스트 조건화를 끊는다.
+    //
+    // whisper는 30초 창마다 직전 창의 디코딩 결과를 다음 창의 프롬프트로 넣는다.
+    // 무음이나 잡음 구간에서 환각 문장이 하나 나오면 그게 다음 창의 "직전 문맥"이
+    // 되어 같은 문장이 창을 넘어 계속 복제된다 — 실제로 40분 회의에서 한 문장이
+    // 20분 가까이 반복된 사고가 있었다. `no_context`는 이름과 달리 **호출 사이**의
+    // 문맥만 끊고 한 호출 안의 창 사이 조건화는 그대로 두므로 소용이 없다. 이
+    // 경로를 실제로 막는 스위치는 n_max_text_ctx다.
+    //
+    // 부작용: 위의 initial_prompt도 같은 경로로 전달되므로 함께 무력화된다.
+    // 어차피 힌트는 첫 창에만 작용했고, 표기 교정은 `terms::correct` 후처리가
+    // 전 구간을 맡고 있어 잃는 것이 작다. 힌트 설정은 나중에 whisper-rs가
+    // carry_initial_prompt를 노출하면 되살아나도록 남겨둔다.
+    params.set_n_max_text_ctx(0);
+
     // 물리 코어만 쓴다. 효율 코어까지 붙이면 오히려 느려지는 경우가 있다.
     let threads = std::thread::available_parallelism()
         .map(|n| (n.get() / 2).max(1))
@@ -179,10 +194,47 @@ pub fn transcribe_samples(
         });
     }
 
+    collapse_repeats(&mut segments);
+
     Ok(Transcript {
         segments,
         elapsed: started.elapsed().as_secs_f64(),
     })
+}
+
+/// 같은 문장이 연달아 반복되는 환각 구간을 하나로 접는다.
+///
+/// 조건화를 끊어도 창 하나(30초) 안에서의 반복까지 막지는 못하고, 디코더가
+/// 어떤 경로로든 루프에 빠지면 결과는 늘 같은 모양이다 — 동일한 문장이 세그먼트
+/// 수십 개로 이어진다. 이 상태로 요약까지 가면 회의록이 그 문장으로 도배된다.
+///
+/// 세 번부터 접는 이유: 사람도 "네. 네." 정도는 연달아 말하지만, 같은 문장을
+/// 토씨 하나 안 틀리고 세 번 이상 말하는 일은 사실상 없다. 접을 때는 첫
+/// 세그먼트를 남기고 시간 범위만 마지막까지 늘린다 — 구간이 사라진 것처럼
+/// 보이면 안 되기 때문이다.
+fn collapse_repeats(segments: &mut Vec<Segment>) {
+    const MIN_RUN: usize = 3;
+
+    let mut out: Vec<Segment> = Vec::with_capacity(segments.len());
+    let mut i = 0;
+    while i < segments.len() {
+        let text = segments[i].text.trim();
+        let mut j = i + 1;
+        while j < segments.len() && segments[j].text.trim() == text && !text.is_empty() {
+            j += 1;
+        }
+
+        if j - i >= MIN_RUN {
+            let mut kept = segments[i].clone();
+            kept.end = segments[j - 1].end;
+            kept.speaker_turn = segments[j - 1].speaker_turn;
+            out.push(kept);
+        } else {
+            out.extend(segments[i..j].iter().cloned());
+        }
+        i = j;
+    }
+    *segments = out;
 }
 
 #[cfg(test)]
@@ -249,6 +301,70 @@ mod tests {
             ("화자 3".to_string(), "김서연".to_string()),
         ]);
         assert_eq!(plain_text(&segments, &names), "김서연: 가나다 라마바");
+    }
+
+    fn timed(text: &str, start: f64, end: f64) -> Segment {
+        Segment {
+            start,
+            end,
+            text: text.into(),
+            speaker: None,
+            speaker_turn: false,
+        }
+    }
+
+    /// 환각 루프의 전형 — 같은 문장이 수십 개 세그먼트로 이어진다. 하나로
+    /// 접히고 시간 범위는 끝까지 보존되어야 한다.
+    #[test]
+    fn collapses_hallucination_runs() {
+        let mut segments: Vec<Segment> = (0..40)
+            .map(|i| timed("시청해 주셔서 감사합니다.", i as f64, i as f64 + 1.0))
+            .collect();
+        segments.push(timed("이제 본론으로 갑시다.", 40.0, 42.0));
+
+        collapse_repeats(&mut segments);
+
+        assert_eq!(segments.len(), 2, "반복이 접히지 않았다");
+        assert_eq!(segments[0].start, 0.0);
+        assert_eq!(segments[0].end, 40.0, "접힌 구간의 시간 범위가 줄었다");
+        assert_eq!(segments[1].text, "이제 본론으로 갑시다.");
+    }
+
+    /// 두 번 연달아 말하는 건 실제 대화에서 흔하다. 건드리면 안 된다.
+    #[test]
+    fn keeps_natural_double_repeats() {
+        let mut segments = vec![
+            timed("네.", 0.0, 1.0),
+            timed("네.", 1.0, 2.0),
+            timed("알겠습니다.", 2.0, 3.0),
+        ];
+        collapse_repeats(&mut segments);
+        assert_eq!(segments.len(), 3, "자연스러운 반복까지 접었다");
+    }
+
+    /// 빈 세그먼트끼리는 같은 텍스트라도 접지 않는다 — 반복이 아니라 무음이다.
+    #[test]
+    fn does_not_collapse_empty_segments() {
+        let mut segments = vec![
+            timed("", 0.0, 1.0),
+            timed("", 1.0, 2.0),
+            timed("", 2.0, 3.0),
+            timed("본론", 3.0, 4.0),
+        ];
+        collapse_repeats(&mut segments);
+        assert_eq!(segments.len(), 4);
+    }
+
+    /// 같은 문장이라도 사이에 다른 말이 끼면 별개의 발언이다.
+    #[test]
+    fn separated_repeats_survive() {
+        let mut segments = vec![
+            timed("좋습니다.", 0.0, 1.0),
+            timed("일정 얘기로 넘어가죠.", 1.0, 2.0),
+            timed("좋습니다.", 2.0, 3.0),
+        ];
+        collapse_repeats(&mut segments);
+        assert_eq!(segments.len(), 3);
     }
 
     /// 빈 세그먼트가 발언을 끊지 않는다. 끊기면 한 사람의 말이 여러 줄로

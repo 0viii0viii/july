@@ -247,13 +247,53 @@ export const deleteMeeting = (id: string) =>
   invoke<void>("delete_meeting", { id });
 
 /**
- * 원본 음성 파일을 Finder(탐색기)에서 보여준다.
+ * 파일을 Finder(탐색기)에서 보여준다.
  *
- * 앱이 직접 녹음한 파일은 앱 데이터 폴더에 있어서 이 길이 없으면 사용자가
- * 원본을 들어볼 방법이 없다.
+ * 원본 음성(앱 데이터 폴더에 있어서 이 길이 없으면 들어볼 방법이 없다)과
+ * 내보낸 회의록(저장 직후 보여줘야 바로 끌어다 공유한다)에 쓴다.
  */
-export const revealAudio = (path: string) =>
-  invoke<void>("reveal_audio", { path });
+export const revealFile = (path: string) =>
+  invoke<void>("reveal_file", { path });
+
+/** 공유용 텍스트를 파일로 쓴다. 위치는 저장 대화상자가 정한다. */
+export const writeExport = (path: string, content: string) =>
+  invoke<void>("write_export", { path, content });
+
+/**
+ * 공유용 문서 — 회의록(요약)과 전사 원문을 한 마크다운으로 묶는다.
+ *
+ * 화면에 보이는 것과 공유되는 것이 같아야 하므로, 화자 이름은 화면과 같은
+ * 규칙(`speakerName`)을 넘겨받아 쓴다.
+ */
+export function exportMarkdown(
+  m: Meeting,
+  speakerName: (label: string) => string,
+): string {
+  const lines: string[] = [];
+  lines.push(`# ${m.title.trim() || "제목 없는 회의"}`);
+  lines.push("");
+  lines.push(`- 일시: ${formatFullDate(m.recorded_at)}`);
+  if (m.duration > 0) lines.push(`- 길이: ${formatClock(m.duration)}`);
+  if (m.context.attendees.trim()) {
+    lines.push(`- 참석자: ${m.context.attendees.trim()}`);
+  }
+  lines.push("");
+  // 요약이 아직 없어도 원문은 공유할 수 있어야 한다 — 회의 직후 급하게
+  // 스크립트만 돌려보는 경우가 있다.
+  lines.push(m.summary?.trim() || "(요약이 아직 없습니다)");
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+  lines.push("## 전사 원문");
+  lines.push("");
+  for (const s of m.segments) {
+    const text = s.text.trim();
+    if (!text) continue;
+    const who = s.speaker ? `${speakerName(s.speaker)}: ` : "";
+    lines.push(`[${formatClock(s.start)}] ${who}${text}`);
+  }
+  return lines.join("\n");
+}
 
 /** 바이트를 사람이 읽는 단위로. 모델 용량 안내에 쓴다. */
 export function formatBytes(bytes: number): string {

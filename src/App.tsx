@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import {
+  open as openFileDialog,
+  save as saveFileDialog,
+} from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import {
   EMPTY_CONTEXT,
@@ -26,7 +30,9 @@ import {
   pullSummarizer,
   recordingStatus,
   renameMeeting,
-  revealAudio,
+  revealFile,
+  exportMarkdown,
+  writeExport,
   saveMeeting,
   savePerson,
   startRecording,
@@ -154,6 +160,8 @@ export default function App() {
     { text: string; speaker: string | null }[] | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  // 공유 복사 직후의 짧은 응답 표시.
+  const [copied, setCopied] = useState(false);
 
   // 명단은 회의와 독립적으로 산다 — 한 번 등록해두고 계속 쓴다.
   const [people, setPeople] = useState<Person[]>([]);
@@ -673,6 +681,42 @@ export default function App() {
     [current, people],
   );
 
+  /** 회의록과 전사 원문을 묶은 공유 문서를 클립보드로. */
+  const onCopyShare = useCallback(async () => {
+    if (!current) return;
+    try {
+      await writeText(exportMarkdown(current, speakerName));
+      // 복사는 화면에 아무 변화가 없어서 버튼이 잠깐 대답해줘야 한다.
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch (e) {
+      setError(`복사하지 못했습니다: ${e}`);
+    }
+  }, [current, speakerName]);
+
+  /** 같은 문서를 마크다운 파일로 저장하고 Finder에서 보여준다. */
+  const onExportShare = useCallback(async () => {
+    if (!current) return;
+    try {
+      const date = current.recorded_at.slice(0, 10);
+      const base = (current.title.trim() || "회의록")
+        // 파일 이름에 못 쓰는 문자만 걷어낸다.
+        .replace(/[\\/:*?"<>|]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const path = await saveFileDialog({
+        defaultPath: `${base} ${date}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (!path) return;
+      await writeExport(path, exportMarkdown(current, speakerName));
+      // 저장한 파일을 바로 보여준다 — 끌어다 놓는 게 공유의 마지막 걸음이다.
+      await revealFile(path);
+    } catch (e) {
+      setError(`내보내지 못했습니다: ${e}`);
+    }
+  }, [current, speakerName]);
+
   // 목록을 오늘/어제/이번 주/지난 기록으로 묶는다.
   const grouped = useMemo(() => {
     const order = ["오늘", "어제", "이번 주", "지난 기록"];
@@ -896,12 +940,32 @@ export default function App() {
                   사용자가 원본을 들어볼 방법이 없다. 전사가 이상할 때 원본
                   확인이 첫 번째 진단 수단이라 회의 화면에 상시로 둔다.
                 */}
+                {/*
+                  공유는 두 갈래 — 붙여넣을 사람은 복사, 문서로 보낼 사람은
+                  내보내기. 둘 다 회의록과 전사 원문을 한 문서로 묶는다.
+                */}
+                <button
+                  className="icon-btn"
+                  style={{ marginLeft: "auto", padding: "2px 8px" }}
+                  onClick={() => void onCopyShare()}
+                  disabled={working}
+                >
+                  {copied ? "복사됨" : "복사"}
+                </button>
+                <button
+                  className="icon-btn"
+                  style={{ padding: "2px 8px" }}
+                  onClick={() => void onExportShare()}
+                  disabled={working}
+                >
+                  내보내기
+                </button>
                 {current.audio_path && (
                   <button
                     className="icon-btn"
-                    style={{ marginLeft: "auto", padding: "2px 8px" }}
+                    style={{ padding: "2px 8px" }}
                     onClick={() => {
-                      revealAudio(current.audio_path!).catch((e) =>
+                      revealFile(current.audio_path!).catch((e) =>
                         setError(String(e)),
                       );
                     }}
@@ -911,10 +975,7 @@ export default function App() {
                 )}
                 <button
                   className="icon-btn"
-                  style={{
-                    marginLeft: current.audio_path ? undefined : "auto",
-                    padding: "2px 8px",
-                  }}
+                  style={{ padding: "2px 8px" }}
                   onClick={onDelete}
                 >
                   삭제

@@ -258,25 +258,37 @@ fn delete_meeting(app: AppHandle, id: String) -> Result<(), String> {
     store::remove(&app, &id)
 }
 
-/// 회의의 원본 음성 파일을 Finder(윈도우에선 탐색기)에서 보여준다.
+/// 파일을 Finder(윈도우에선 탐색기)에서 보여준다.
 ///
-/// 앱이 직접 녹음한 파일은 앱 데이터 폴더 깊숙이 저장되어 사용자가 찾아갈
-/// 방법이 없다. 전사가 이상하게 나왔을 때 원본을 들어봐야 녹음 문제인지
-/// 전사 문제인지 가릴 수 있으므로, 여는 길을 하나 내준다.
+/// 두 곳에서 쓴다. 원본 음성 — 앱이 직접 녹음한 파일은 앱 데이터 폴더 깊숙이
+/// 저장되어 이 길이 없으면 들어볼 방법이 없다. 그리고 내보낸 회의록 — 저장
+/// 직후 파일을 보여줘야 바로 끌어다 공유할 수 있다.
 #[tauri::command]
-fn reveal_audio(path: String) -> Result<(), String> {
+fn reveal_file(path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
     if !path.exists() {
-        return Err("음성 파일을 찾을 수 없습니다. 옮겨졌거나 지워진 것 같습니다.".into());
+        return Err("파일을 찾을 수 없습니다. 옮겨졌거나 지워진 것 같습니다.".into());
     }
     tauri_plugin_opener::reveal_item_in_dir(&path)
         .map_err(|e| format!("파일을 표시할 수 없습니다: {e}"))
+}
+
+/// 공유용으로 만든 텍스트를 파일로 쓴다.
+///
+/// 내용은 프론트엔드가 만든다 — 화면에 보이는 회의록·화자 이름과 내보낸
+/// 문서가 다르면 안 되므로, 표시 로직이 있는 쪽이 문서도 만든다. 저장 위치는
+/// 시스템 저장 대화상자가 정하므로 여기서는 쓰기만 한다.
+#[tauri::command]
+fn write_export(path: String, content: String) -> Result<(), String> {
+    std::fs::write(PathBuf::from(&path), content)
+        .map_err(|e| format!("파일을 저장할 수 없습니다: {e}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -303,7 +315,8 @@ pub fn run() {
             save_meeting,
             rename_meeting,
             delete_meeting,
-            reveal_audio,
+            reveal_file,
+            write_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
